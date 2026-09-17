@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-17 17:52 CST
+Updated: 2026-09-17 17:57 CST
 
 ## Status
 
@@ -34,7 +34,8 @@ returned 217,256 PCM bytes and the G1 audio stream accepted the full playback.
 The operator confirmed that Kian meets the desired voice quality. The refactored
 file-based path has also completed its first live generation-and-playback test;
 cancellation and repeated playback now have explicit offline behavior and tests,
-but both still require stationary live acceptance before Phase 1 is accepted.
+and the live API exercise has now completed; operator listening confirmation is
+still required before Phase 1 is accepted.
 
 When no DDS interface is supplied, `G1AudioHelper` now runs `ifconfig` and
 selects the interface whose IPv4 address starts with `192.168.123.`. Callers can
@@ -271,6 +272,17 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   regression. `uv sync`, `uv lock --check`, compilation of `app`, `component`,
   and `util`, `git diff --check`, and the four affected safe demos also passed.
 
+Live audio acceptance evidence (2026-09-17T09:57:06Z): the existing
+`welcome_bilingual.wav` was streamed on eth0 with cancellation requested after
+1.5 seconds, followed by two complete repeats separated by two-second gaps.
+Cancellation returned after 64,000 of 216,388 PCM bytes; each repeat submitted
+all 216,388 bytes. All three stream IDs differed, and the test process exited
+successfully. Actual audible stop timing and complete repeat playback await
+operator confirmation. The pinned SDK's `PlayStop` discards the RPC response
+and returns zero unconditionally, so this run does not prove stop acknowledgement.
+No arm or locomotion command was issued. Only this handoff document changed;
+the previously recorded 54-test code baseline remains unchanged.
+
 ## Current Files
 
 - `AGENTS.md` — repository conventions, structure, testing, and safety rules.
@@ -311,9 +323,9 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 
 ## Session Checkpoint
 
-- Work is in a safe state after the 2026-09-17 17:49 CST read-only preflight. No
-  robot control, cloud, ROS, or demo process was left running, and no motion
-  command was issued.
+- The audio acceptance process exited at 2026-09-17 17:57 CST. No motion
+  command was issued. Earlier diagnostic subscriber cleanup was not conclusively
+  verified across process namespaces; do not assume all earlier readers exited.
 - Phase 1 speech generation and one complete file-based G1 playback are working.
   The current reusable test asset is `data/tts/welcome_bilingual.wav`.
 - Live TTS now discovers the G1-facing interface from the
@@ -324,8 +336,9 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   G1 network/audio/action SDK details remain in their approved `util/*_helper.py`
   boundaries.
 - Phase 1 still needs audio cancellation and repeat-playback acceptance. The
-  offline cancellation and repeat behavior is implemented and tested; only the
-  stationary target-G1 acceptance remains. The Phase 2 offline foundation is
+  offline cancellation and repeat behavior is implemented and tested, and the
+  live API exercise completed; operator listening confirmation remains.
+  The Phase 2 offline foundation is
   complete for `present_left`: recorder data,
   schema validation, 14-arm normalization, dry-run sequencing, cancellation,
   motion leasing, and the injectable SDK boundary are covered by tests.
@@ -338,8 +351,9 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 
 ## Next Actions
 
-1. Verify cancellation and repeated playback on the stationary G1 before
-   accepting the Phase 1 gate; the offline implementation and tests are complete.
+1. Obtain operator listening confirmation for the completed cancellation and
+   two-repeat exercise before accepting Phase 1; preserve the SDK stop-response
+   limitation in any interpretation of programmatic results.
 2. Review the provisional action gains and limits with an on-site operator, then
    perform a secured, low-speed `present_left` test with physical emergency-stop
    coverage. Only after that evidence may `hardware_verified` become true.
@@ -360,7 +374,7 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   recorded.
 - FAST-LIO2 saved-map relocalization and rotation stability are not yet validated
   on the target robot.
-- BytePlus-to-G1 cancellation is implemented offline but not yet validated on
-  the target speaker service.
+- Audio cancellation and repeats completed at the API level; audible acceptance
+  remains pending, and the SDK does not expose the actual stop RPC result.
 - The definition of the guide's safe home position or docking behavior is not
   yet decided.
