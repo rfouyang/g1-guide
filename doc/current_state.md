@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-16 10:27 CST
+Updated: 2026-09-17 17:25 CST
 
 ## Status
 
@@ -18,6 +18,15 @@ application composition root validates `present_left` in dry-run mode. The
 low-level `rt/arm_sdk` adapter is injectable and tested, but live execution is
 locked by `hardware_verified: false`; no motion command has been sent. ROS and
 navigation code have not been scaffolded.
+
+A strictly read-only Phase 2 action preflight is now implemented offline. Its
+low-level boundary constructs subscribers only for `rt/lowstate` and
+`rt/sportmodestate`; it has no publisher factory or command API. The workflow
+records an independently observed model and firmware version, DDS schema and
+topics, state ages, modes, motor count, all 14 allowlisted arm positions,
+temperatures and faults, plus observed linear and yaw speed in an atomic JSON
+report under `output/action_preflight/`. It does not change
+`hardware_verified`, and it has not yet been run against the target G1.
 
 The first live BytePlus-to-G1 test completed successfully on `eth0`: BytePlus
 returned 217,256 PCM bytes and the G1 audio stream accepted the full playback.
@@ -209,10 +218,25 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 - All 37 unit tests passed without credentials, network, ROS, DDS, audio hardware,
   or a robot after the action foundation was added. This includes a fake-clock
   full playback and cancellation test. No motion command was sent.
-- Final baseline verification passed for `uv sync`, `uv lock --check`, Python
+- The Phase 2 foundation baseline passed `uv sync`, `uv lock --check`, Python
   compilation of `app`, `component`, and `util`, and the safe application demo.
-  `git diff --check` remains unavailable because this workspace has no functional
-  Git repository metadata; direct whitespace and conflict-marker scans passed.
+  At that earlier checkpoint, Git metadata was not functional, so direct
+  whitespace and conflict-marker scans were used instead of `git diff --check`.
+- Restored functional Git metadata, created the initial repository commit, and
+  pushed `main` to `https://github.com/rfouyang/g1-guide` at commit `2fc6432`.
+- Added a subscriber-only G1 action-state helper and action preflight workflow.
+  The report fails closed on missing independent firmware observation, model or
+  `mode_machine` mismatch, stale samples, motion errors, missing motors, arm
+  faults, over-temperature, out-of-contract arm positions, or nonzero base
+  velocity beyond the configured stationary thresholds.
+- Added explicit stationary thresholds of 0.01 m/s linear speed and 0.01 rad/s
+  yaw speed to the versioned action safety configuration.
+- All 47 unit tests passed after the preflight work, including safe CLI
+  interlocks, subscriber-only construction, malformed low- and motion-state
+  rejection, stale state, aggregate safety failures, and atomic report
+  persistence. Python compilation and project-owned diff checks also passed. An
+  online `uv lock --check` resolved the unchanged metadata and confirmed that
+  `uv.lock` is current.
 
 ## Current Files
 
@@ -233,11 +257,16 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   17-source-joint to 14-arm normalization.
 - `component/action/action_service.py` — dry/live policy, motion lease, base-stop
   checks, cancellation, transition, and fixed-rate action sequencing.
+- `component/action/action_preflight.py` — subscriber-only action safety checks
+  and atomic evidence reports.
 - `asset/g1_arm_contract.json` — pinned robot model, joint limits, and DDS arm
   allowlist; live hardware verification is currently false.
 - `config/action_safety.json` — provisional conservative arm-action limits.
 - `data/actions/` — recorder definitions and compiled trajectories.
 - `app/tts_demo.py` — explicit stationary live composition and CLI.
+- `app/action_preflight.py` — safe-by-default read-only target-G1 preflight CLI.
+- `util/g1_helper/g1_action_helper/action_state_helper.py` — low-state and
+  sport-state DDS subscriber boundary with no command publisher.
 - `tests/` — safe foundation unit tests.
 - `third_party/unitree_sdk2_python/` — pinned upstream Unitree SDK source.
 - `third_party/cyclonedds/` — pinned CycloneDDS 0.10.2 source.
@@ -246,7 +275,7 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 
 ## Session Checkpoint
 
-- Work paused in a safe state at 2026-09-16 10:27 CST. No robot, DDS, cloud, ROS,
+- Work paused in a safe state at 2026-09-17 17:25 CST. No robot, DDS, cloud, ROS,
   or demo process was left running, and no motion command was issued.
 - Phase 1 speech generation and one complete file-based G1 playback are working.
   The current reusable test asset is `data/tts/welcome_bilingual.wav`.
@@ -261,19 +290,24 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   Phase 2 offline foundation is complete for `present_left`: recorder data,
   schema validation, 14-arm normalization, dry-run sequencing, cancellation,
   motion leasing, and the injectable SDK boundary are covered by tests.
-- Live arm execution remains fail-closed. Do not change `hardware_verified` until
-  a read-only target-robot preflight confirms model/DOF, firmware behavior,
-  `mode_machine`, motor health, temperatures, base-stop observation, and physical
-  emergency-stop coverage.
-- Resume from Next Action 2: implement a strictly read-only target-robot action
-  preflight. Do not begin physical playback during that step.
+- Live arm execution remains fail-closed. The read-only preflight implementation
+  is complete offline, but it still needs a target-robot run confirming the
+  independently observed model/firmware, DDS schema, `mode_machine`, motor
+  health, temperatures, and zero base speed. Do not begin physical playback
+  during that step or change `hardware_verified` from `false`.
+- The pinned Python SDK exposes only
+  `unitree_go.msg.dds_.SportModeState_`; official Unitree material names
+  `rt/sportmodestate` for G1, but the exact target firmware compatibility must be
+  established by the first live read-only run.
 
 ## Next Actions
 
 1. Add explicit cancellation and repeat-playback tests, then verify both on the
    stationary G1 before accepting the Phase 1 gate.
-2. Add a read-only G1 action preflight command that records the actual model,
-   mode, fresh low state, arm temperatures/faults, and observed zero base speed.
+2. Run the read-only G1 action preflight on the stationary target. Record the
+   independently observed model and firmware, verify that the target publishes
+   the configured motion-state schema/topic, and review the saved report. Do not
+   publish an arm or locomotion command during this step.
 3. Review the provisional action gains and limits with an on-site operator, then
    perform a secured, low-speed `present_left` test with physical emergency-stop
    coverage. Only after that evidence may `hardware_verified` become true.
@@ -287,6 +321,9 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 
 - Exact target G1 hardware and firmware contract is not yet observed on hardware;
   the file contract therefore remains explicitly unverified.
+- The pinned Python SDK's `unitree_go` motion-state type must be proven compatible
+  with the target G1 `rt/sportmodestate` payload before its velocity evidence is
+  accepted.
 - Provisional arm gains, velocity/acceleration limits, state timeout, and motor
   temperature cutoff require secured hardware validation.
 - The exact Livox model, extrinsics, and machine/network configuration are not yet
@@ -296,5 +333,3 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 - BytePlus-to-G1 cancellation behavior is not implemented or validated yet.
 - The definition of the guide's safe home position or docking behavior is not
   yet decided.
-- The current `.git` directory is empty/non-functional, so repository status and
-  diff checks cannot run yet.

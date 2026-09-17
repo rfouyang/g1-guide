@@ -17,6 +17,10 @@ joint limits, velocity, and acceleration, then normalizes it to exactly 14 arm
 joints. Live arm publication remains locked until the target robot contract is
 verified on secured hardware.
 
+The action preflight is a separate subscriber-only path. It observes
+`rt/lowstate` and `rt/sportmodestate`, records the allowlisted arm motor health
+and base velocity, and never constructs an arm or locomotion command client.
+
 ## Development
 
 ```bash
@@ -41,6 +45,34 @@ Run the current safe application demo with:
 ```bash
 uv run python -m app.application
 ```
+
+The action preflight also defaults to a no-DDS safe mode:
+
+```bash
+uv run python -m app.action_preflight
+```
+
+On secured hardware, first confirm from trusted robot information that the target
+matches the pinned 29-DOF fake-hand contract and record its firmware version.
+Then run the subscriber-only check using the contract's canonical model ID:
+
+```bash
+CYCLONEDDS_HOME="$PWD/third_party/cyclonedds/install" \
+uv run --extra hardware python -m app.action_preflight \
+  --live --confirm-stationary --interface eth0 \
+  --observed-model-id unitree_g1_29dof_rev_1_0_fake_hand \
+  --observed-firmware-version '<version shown on the target robot>'
+```
+
+The default base-state topic is `rt/sportmodestate`. If the target firmware is
+independently shown to publish only its low-frequency form, pass
+`--motion-state-topic rt/lf/sportmodestate`; the selected topic is recorded in
+the report.
+
+The report is written atomically under `output/action_preflight/` and remains a
+runtime artifact. A passing report does not enable arm playback or change
+`hardware_verified`; the observed identity, DDS schema, gains, limits, and
+physical emergency-stop coverage still require operator review.
 
 The BytePlus TTS 2.0 demo remains offline unless both live flags are supplied:
 

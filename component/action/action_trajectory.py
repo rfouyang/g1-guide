@@ -129,6 +129,8 @@ class ActionSafetyLimits:
     max_acceleration: float
     max_tracking_error: float
     max_motor_temperature: int
+    max_stationary_linear_speed: float
+    max_stationary_yaw_speed: float
 
     @classmethod
     def load(cls, safety_path: Path) -> ActionSafetyLimits:
@@ -153,6 +155,16 @@ class ActionSafetyLimits:
                 max_motor_temperature=int(
                     payload["max_motor_temperature_celsius"]
                 ),
+                max_stationary_linear_speed=float(
+                    payload[
+                        "max_stationary_linear_speed_meters_per_second"
+                    ]
+                ),
+                max_stationary_yaw_speed=float(
+                    payload[
+                        "max_stationary_yaw_speed_radians_per_second"
+                    ]
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"Invalid action safety configuration: {error}") from error
@@ -164,6 +176,8 @@ class ActionSafetyLimits:
             limits.max_velocity,
             limits.max_acceleration,
             limits.max_tracking_error,
+            limits.max_stationary_linear_speed,
+            limits.max_stationary_yaw_speed,
         )
         if not all(np.isfinite(value) and value > 0.0 for value in numeric_limits):
             raise ValueError("Action safety limits must be finite and positive")
