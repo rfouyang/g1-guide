@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from component.action.action_preflight import ActionPreflightService
+from component.action.action_preflight import ActionPreflightService, CommissioningGuard
 from component.action.action_trajectory import ActionSafetyLimits, G1ArmContract
 from util.g1_helper.g1_action_helper.action_state_helper import (
     G1ActionStateObservation,
@@ -47,6 +47,28 @@ class ActionPreflightServiceTests(unittest.TestCase):
             project_root / "config/action_safety.json"
         )
         self.observed_at = 100.0
+
+    def test_commissioning_guard_rechecks_changed_state(self) -> None:
+        reader = FakeActionStateReader(self._healthy_observation())
+        guard = CommissioningGuard(
+            self._service(reader), self.contract.robot_model_id, "1.5.4"
+        )
+        self.assertTrue(guard.check())
+        reader.observation = replace(
+            reader.observation,
+            fsm_state=replace(reader.observation.fsm_state, fsm_id=500),
+        )
+        with self.assertRaisesRegex(RuntimeError, "501/0"):
+            guard.check()
+
+    def test_commissioning_rejects_different_firmware(self) -> None:
+        reader = FakeActionStateReader(self._healthy_observation())
+        guard = CommissioningGuard(
+            self._service(reader), self.contract.robot_model_id, "unknown"
+        )
+        with self.assertRaisesRegex(RuntimeError, "firmware"):
+            guard.check()
+        self.assertEqual(reader.connect_count, 0)
 
     def test_passing_read_only_report_is_saved_atomically(self) -> None:
         reader = FakeActionStateReader(self._healthy_observation())

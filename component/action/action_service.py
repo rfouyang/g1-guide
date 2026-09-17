@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from typing import Protocol
 
 from loguru import logger
@@ -52,7 +52,13 @@ class ActionExecution:
 
 
 class ActionService:
-    """Validate and run one two-arm action under the shared motion lease."""
+    """Validate and run one two-arm action under the shared motion lease.
+
+    On the biped G1, ``stop_base`` must stop walking requests while preserving
+    the robot's standing/balance controller. It must never disable leg motors,
+    request damping, or change posture. Arm authority release is a control
+    handoff, not proof that the robot has physically stopped safely.
+    """
 
     def __init__(
         self,
@@ -67,12 +73,15 @@ class ActionService:
         self.arm_client = kwargs.get("arm_client")
         self.base_is_stationary = kwargs.get("base_is_stationary")
         self.stop_base = kwargs.get("stop_base")
+        self.live_guard = kwargs.get("live_guard")
         self.clock = kwargs.get("clock", time.monotonic)
         self.sleeper = kwargs.get("sleeper", time.sleep)
         self.trajectory_helper = kwargs.get(
             "trajectory_helper",
             TrajectoryHelper(),
         )
+        self.initial_state_wait_seconds = 5.0
+        self.cleanup_timeout_seconds = 1.0
         if not callable(self.clock) or not callable(self.sleeper):
             raise TypeError("clock and sleeper must be callable")
 
@@ -80,6 +89,8 @@ class ActionService:
         self,
         action_name: str,
         operator_confirmed: bool = False,
+        *,
+        commissioning: bool = False,
         **kwargs: object,
     ) -> ActionExecution:
         trajectory = self.loader.load(action_name)
@@ -93,7 +104,14 @@ class ActionService:
                 cancelled=False,
             )
             return dry_run
-        if not self.loader.contract.hardware_verified:
+        if commissioning:
+            if action_name != "present_left" or not callable(self.live_guard):
+                raise PermissionError(
+                    "Commissioning requires present_left and a live state guard"
+                )
+            self.live_guard()
+            trajectory = replace(trajectory, timestamps=trajectory.timestamps * 4.0)
+        elif not self.loader.contract.hardware_verified:
             raise PermissionError(
                 "Live action playback is locked until the target G1 hardware "
                 "contract is verified"
@@ -102,24 +120,26 @@ class ActionService:
         cancel_event = kwargs.get("cancel_event", Event())
         if not isinstance(cancel_event, Event):
             raise TypeError("cancel_event must be threading.Event")
-        return self._execute_live(trajectory, cancel_event)
+        return self._execute_live(trajectory, cancel_event, commissioning)
 
     def _execute_live(
         self,
         trajectory: ActionTrajectory,
         cancel_event: Event,
+        commissioning: bool = False,
     ) -> ActionExecution:
         if self.arm_client is None:
             raise RuntimeError("Live action playback requires an arm client")
-        if not callable(self.base_is_stationary) or not callable(self.stop_base):
-            raise RuntimeError("Live action playback requires base safety callbacks")
+        if not callable(self.base_is_stationary):
+            raise RuntimeError("Live action playback requires a stationary-state reader")
 
         self.motion_lease.acquire(MotionOwner.PRESENTATION)
         cancelled = False
+        execution_error: BaseException | None = None
         try:
             self.arm_client.connect()
             arm_state = self.arm_client.wait_for_state(
-                self.loader.safety_limits.state_timeout_seconds
+                self.initial_state_wait_seconds
             )
             self._preflight(arm_state)
             self._require_stationary_base()
@@ -135,16 +155,24 @@ class ActionService:
             )
             if not cancelled:
                 cancelled = self._play_trajectory(trajectory, cancel_event)
-            if cancelled:
-                self.stop_base()
-        except Exception:
-            self.stop_base()
+            if commissioning and not cancelled:
+                cancelled = self._return_and_release(measured_arms, cancel_event)
+        except BaseException as error:
+            execution_error = error
             raise
         finally:
-            try:
-                self.arm_client.release()
-            finally:
+            cleanup_errors = self._cleanup()
+            if not cleanup_errors:
                 self.motion_lease.release(MotionOwner.PRESENTATION)
+            elif execution_error is None:
+                raise RuntimeError(
+                    "Action cleanup failed; motion lease retained: "
+                    + "; ".join(cleanup_errors)
+                )
+            else:
+                logger.error(
+                    "Action cleanup failed; motion lease retained: {}", cleanup_errors
+                )
 
         execution = ActionExecution(
             action_name=trajectory.action_name,
@@ -155,7 +183,35 @@ class ActionService:
         )
         return execution
 
+    def _cleanup(self) -> list[str]:
+        """Attempt independent stops; retain ownership if completion is unknown.
+
+        A timed-out Python thread cannot be killed. Its callback may still finish
+        later, so no subsequent motion owner may acquire this lease.
+        """
+        operations = [
+            ("arm release", self.arm_client.release),
+        ]
+        if callable(self.stop_base):
+            operations.append(("base stop", self.stop_base))
+        attempts = [StopAttempt(name, callback) for name, callback in operations]
+        for attempt in attempts:
+            attempt.start()
+        deadline = time.monotonic() + self.cleanup_timeout_seconds
+        for attempt in attempts:
+            attempt.finished.wait(max(0.0, deadline - time.monotonic()))
+        failures = [attempt.failure for attempt in attempts if attempt.failure]
+        return failures
+
     def _preflight(self, arm_state: G1ArmState) -> None:
+        state_age = float(self.clock()) - arm_state.received_at
+        if (
+            not math.isfinite(state_age)
+            or not 0 <= state_age <= self.loader.safety_limits.state_timeout_seconds
+        ):
+            raise RuntimeError("G1 arm state is stale or has an invalid timestamp")
+        if arm_state.mode_machine != self.loader.contract.mode_machine:
+            raise RuntimeError("G1 mode_machine does not match the action contract")
         arm_indices = self.loader.contract.arm_indices
         required_motor_count = max(arm_indices) + 1
         if (
@@ -164,6 +220,17 @@ class ActionService:
             or len(arm_state.motor_faults) < required_motor_count
         ):
             raise RuntimeError("G1 low state does not contain all arm motors")
+        for joint in self.loader.contract.arm_joints:
+            position = arm_state.positions[joint.dds_index]
+            if (
+                not math.isfinite(position)
+                or not joint.lower <= position <= joint.upper
+            ):
+                raise RuntimeError(f"Measured position is unsafe for {joint.name}")
+        if any(
+            not math.isfinite(arm_state.temperatures[index]) for index in arm_indices
+        ):
+            raise RuntimeError("Arm motor temperatures must be finite")
         faulty_joints = [
             index for index in arm_indices if arm_state.motor_faults[index] != 0
         ]
@@ -216,9 +283,13 @@ class ActionService:
             math.ceil(limits.transition_seconds * limits.control_frequency_hz),
         )
         first_positions = trajectory.joint_positions[0]
+        expected_positions = measured_arms
+        period = 1.0 / limits.control_frequency_hz
+        deadline = float(self.clock())
         for step in range(step_count + 1):
-            if self._should_cancel(cancel_event):
+            if self._should_cancel(cancel_event, expected_positions):
                 return True
+            self._require_deadline(deadline, period)
             ratio = step / step_count
             smooth_ratio = ratio * ratio * (3.0 - 2.0 * ratio)
             arm_positions = [
@@ -235,7 +306,9 @@ class ActionService:
                 kd=limits.arm_kd,
                 weight=ratio,
             )
-            self.sleeper(1.0 / limits.control_frequency_hz)
+            expected_positions = arm_positions
+            deadline += period
+            self.sleeper(max(0.0, deadline - float(self.clock())))
         return False
 
     def _play_trajectory(
@@ -247,14 +320,17 @@ class ActionService:
         period = 1.0 / limits.control_frequency_hz
         start_time = float(self.clock())
         next_elapsed = 0.0
+        expected_positions = trajectory.joint_positions[0]
         while next_elapsed < trajectory.duration_seconds:
-            if self._should_cancel(cancel_event):
+            if self._should_cancel(cancel_event, expected_positions):
                 return True
+            self._require_deadline(start_time + next_elapsed, period)
             arm_positions = self.trajectory_helper.sample(
                 trajectory.timestamps,
                 trajectory.joint_positions,
                 next_elapsed,
             )
+            expected_positions = arm_positions
             self.arm_client.publish_arm_positions(
                 arm_positions,
                 kp=limits.arm_kp,
@@ -265,27 +341,125 @@ class ActionService:
             if remaining > 0.0:
                 self.sleeper(remaining)
 
-        if self._should_cancel(cancel_event):
+        if self._should_cancel(cancel_event, expected_positions):
             return True
+        self._require_deadline(start_time + next_elapsed, period)
         self.arm_client.publish_arm_positions(
             trajectory.joint_positions[-1],
             kp=limits.arm_kp,
             kd=limits.arm_kd,
         )
+        self.sleeper(period)
+        if self._should_cancel(cancel_event, trajectory.joint_positions[-1]):
+            return True
         logger.info("Completed two-arm action {}", trajectory.action_name)
         return False
 
-    def _should_cancel(self, cancel_event: Event) -> bool:
+    def _require_deadline(self, deadline: float, period: float) -> None:
+        lateness = float(self.clock()) - deadline
+        if not math.isfinite(lateness) or lateness > period:
+            raise RuntimeError("Arm control-loop deadline missed")
+
+    def _should_cancel(
+        self, cancel_event: Event, expected_positions: Sequence[float]
+    ) -> bool:
         if cancel_event.is_set():
             return True
         self._require_stationary_base()
         current_state = self.arm_client.latest_state()
         self._preflight(current_state)
+        for index, expected in zip(
+            self.loader.contract.arm_indices, expected_positions, strict=True
+        ):
+            tracking_error = abs(current_state.positions[index] - expected)
+            if tracking_error > self.loader.safety_limits.max_tracking_error:
+                raise RuntimeError(
+                    f"Arm tracking error exceeds limit at DDS index {index}"
+                )
         return False
 
     def _require_stationary_base(self) -> None:
+        if callable(self.live_guard):
+            self.live_guard()
         if not self.base_is_stationary():
             raise RuntimeError("G1 base must remain stationary during an arm action")
+
+    def _return_and_release(
+        self, starting_positions: Sequence[float], cancel_event: Event
+    ) -> bool:
+        """Return to measured starting arms, then fade SDK authority like upstream."""
+        limits = self.loader.safety_limits
+        state = self.arm_client.latest_state()
+        self._preflight(state)
+        current = tuple(state.positions[i] for i in self.loader.contract.arm_indices)
+        max_delta = max(abs(a - b) for a, b in zip(current, starting_positions))
+        duration = max(
+            8.0,
+            1.5 * max_delta / limits.max_velocity,
+            math.sqrt(6.0 * max_delta / limits.max_acceleration),
+        )
+        period = 1.0 / limits.control_frequency_hz
+        steps = math.ceil(duration / period)
+        expected = current
+        deadline = float(self.clock())
+        for step in range(steps + 1):
+            if self._should_cancel(cancel_event, expected):
+                return True
+            self._require_deadline(deadline, period)
+            ratio = step / steps
+            blend = ratio * ratio * (3.0 - 2.0 * ratio)
+            expected = tuple(
+                a + (b - a) * blend for a, b in zip(current, starting_positions)
+            )
+            self.arm_client.publish_arm_positions(
+                expected, kp=limits.arm_kp, kd=limits.arm_kd
+            )
+            deadline += period
+            self.sleeper(max(0.0, deadline - float(self.clock())))
+        # During handoff the standing controller may choose a different arm pose;
+        # continue health/stationary checks, but don't compare to our old target.
+        for step in range(151):
+            if cancel_event.is_set():
+                return True
+            self._require_stationary_base()
+            self._preflight(self.arm_client.latest_state())
+            self._require_deadline(deadline, period)
+            self.arm_client.publish_arm_positions(
+                starting_positions, kp=limits.arm_kp, kd=limits.arm_kd,
+                weight=1.0 - step / 150,
+            )
+            deadline += period
+            self.sleeper(max(0.0, deadline - float(self.clock())))
+        return False
+
+
+class StopAttempt:
+    """Run one potentially blocking stop without delaying another stop."""
+
+    def __init__(self, name: str, callback: Callable[[], object]) -> None:
+        self.name = name
+        self.callback = callback
+        self.finished = Event()
+        self.error: BaseException | None = None
+
+    def start(self) -> None:
+        Thread(target=self._run, daemon=True, name=self.name).start()
+
+    def _run(self) -> None:
+        try:
+            self.callback()
+        except BaseException as error:
+            self.error = error
+        finally:
+            self.finished.set()
+
+    @property
+    def failure(self) -> str:
+        if not self.finished.is_set():
+            return f"{self.name} timed out"
+        if self.error is not None:
+            return f"{self.name}: {type(self.error).__name__}"
+        return ""
 
 
 def demo_action_service() -> None:

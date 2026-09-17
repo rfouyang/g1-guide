@@ -382,6 +382,31 @@ class ActionPreflightService:
         return normalized_text or None
 
 
+class CommissioningGuard:
+    """Restrict first-run playback to the observed G1 configuration."""
+
+    def __init__(
+        self, preflight: ActionPreflightService, model_id: str, firmware: str
+    ) -> None:
+        self.preflight = preflight
+        self.model_id = model_id
+        self.firmware = firmware
+        self.last_report: ActionPreflightReport | None = None
+
+    def check(self) -> bool:
+        if self.firmware != "1.5.4":
+            raise RuntimeError("Commissioning is restricted to observed firmware 1.5.4")
+        report = self.preflight.inspect(self.model_id, self.firmware)
+        self.last_report = report
+        if not report.passed:
+            raise RuntimeError(
+                "Arm commissioning preflight failed: " + "; ".join(report.failures)
+            )
+        if (report.fsm_id, report.fsm_mode, report.mode_pr) != (501, 0, 0):
+            raise RuntimeError("Commissioning requires observed FSM 501/0 and mode_pr 0")
+        return True
+
+
 class DemoActionStateReader:
     """Provide deterministic read-only state for the module demo."""
 

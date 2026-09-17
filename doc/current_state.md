@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-17T10:01:08Z
+Updated: 2026-09-17T10:13:38Z
 
 ## Status
 
@@ -325,6 +325,27 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Session Checkpoint
 
+- Added `app.arm_commissioning`: explicit live single-run entry point following
+  the vendored arm7 SDK example, narrowed to 14 arms and no locomotion command
+  client. The commissioning gate permits only `present_left` with confirmation
+  and a continuous subscriber guard; contract verification remains false.
+  Playback is 16 s, followed by an at-least-8 s return to measured starting arms
+  and 3 s authority fade. Guard pins observed firmware 1.5.4 / FSM 501/0 /
+  mode_pr 0. SIGINT/SIGTERM cancellation and before/after reports are wired.
+  All 70 tests passed. No live motion was performed. See `doc/arm_acceptance.md`
+  for the explicit command and operator prerequisites; physical handoff, battery,
+  workspace and controller-ownership acceptance remain unresolved by unit tests.
+- Implemented execution tracking checks against the previous arm command,
+  workflow-level fresh/finite/in-range state checks, transition/playback overrun
+  rejection, separate 5 s discovery timeout, and independent stop/release
+  attempts with a 1 s cleanup budget. Cleanup failure retains the motion lease;
+  original execution errors are preserved. All 63 tests, compile check,
+  lock check and diff check passed. No physical execution occurred.
+- The operator reiterated that G1 is a biped. The walking-stop callback must
+  preserve standing/balance control, never disable legs or request damping.
+  Callback completion and arm release do not prove a safe physical handoff.
+  Actual live adapters, continuous FSM policy, commissioning entry point and
+  observed final-state reporting remain unfinished.
 - The 2026-09-17T10:01:08Z offline arm review produced
   `doc/arm_acceptance.md`. `present_left` dry-run passed: 101 samples, 4 s,
   maximum sampled velocity 1.284879 rad/s and acceleration 1.975351 rad/s².
@@ -358,12 +379,11 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Next Actions
 
-1. Close the offline implementation gates in `doc/arm_acceptance.md`: scoped
-   commissioning authorization, continuous state policy, tracking/timing checks,
-   bounded stop/release and final-state observation. Do not unlock the current
-   executor by setting `hardware_verified=true` before acceptance.
-2. After these gates close, review gains, reduced-speed profile and both arms'
-   workspace with an on-site operator. Obtain fresh robot state and per-run
+1. Review the implemented arm-only commissioning entry point with the operator;
+   do not modify `hardware_verified` to perform the first test. It does not
+   create a walking client or change standing mode.
+2. Confirm stable standing, sufficient battery, no competing arm controller,
+   emergency-stop coverage and clearance for both arms. Obtain fresh robot state and per-run
    confirmation for a secured `present_left` test with physical emergency-stop
    coverage. Only after evidence review may `hardware_verified` become true.
 3. Retune or regenerate `concierge_speak_v1`; do not bypass its current velocity
@@ -374,9 +394,10 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Blockers
 
-- The live-execution review found that configured tracking-error limits are not
-  enforced by the executor, continuous FSM checks are not wired, stop callbacks
-  can delay arm release, and there is no separate first-run commissioning gate.
+- Tracking limits, bounded arm cleanup, continuous FSM checks, before/after
+  subscriber reports and a first-run commissioning gate are implemented.
+  Physical arm handoff and tolerance validation remain pending; battery,
+  collision clearance and external controller ownership need operator checks.
   See `doc/arm_acceptance.md`; the candidate is not ready for physical playback.
 - The target identity and read-only state contract are observed, but the file
   contract remains explicitly unverified for command execution until a secured

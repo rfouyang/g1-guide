@@ -1,11 +1,88 @@
 # Two-arm commissioning checklist
 
-Reviewed: 2026-09-17T10:01:08Z
+Reviewed: 2026-09-17T10:13:38Z
 
-## Current decision: no live playback yet
+## Implemented single-run entry point
 
-This is a preparation checklist, not permission or an executable live-motion
-runbook. Keep `asset/g1_arm_contract.json` at `hardware_verified: false`.
+`app.arm_commissioning` now provides a separate commissioning path without
+changing `hardware_verified`. Default invocation is offline:
+
+```bash
+uv run python -m app.arm_commissioning
+```
+
+Implementation follows the vendored
+`example/g1/high_level/g1_arm7_sdk_dds_example.py`: `rt/arm_sdk`, CRC, authority
+slot 29, and a gradual normal-exit authority fade. Unlike that example, it does
+not include waist joints or request a zero full-body posture. Only indices
+15–28 receive arm control gains. It never constructs a locomotion command
+client. The existing optional base-stop callback is not supplied on this path.
+
+The commissioning service restricts action selection to `present_left`, requires
+explicit live confirmation and a live state guard, stretches playback from 4 s
+to 16 s, returns to this run's measured initial arm positions over at least 8 s,
+then fades authority over 3 s. The initial transition remains 2 s and is checked
+against velocity/acceleration limits. The guard restricts the observed target to
+firmware 1.5.4, FSM 501/0 and mode_pr 0 and rechecks subscriber preflight evidence
+throughout execution. Ctrl-C/SIGTERM requests cancellation; cancellation/fault
+does not attempt the normal return trajectory and instead attempts immediate
+zero-authority release. This is not a verified physical emergency stop.
+
+After the on-site operator confirms stable standing, sufficient battery, no
+active competing arm controller, clearance for both arms, and emergency-stop
+coverage, the explicit entry point is:
+
+```bash
+CYCLONEDDS_HOME="$PWD/third_party/cyclonedds/install" uv run --extra hardware \
+  python -m app.arm_commissioning --live --interface eth0 \
+  --confirm-arm-motion --confirm-clear-workspace --confirm-standing \
+  --observed-model-id unitree_g1_29dof_rev_1_0_fake_hand \
+  --observed-firmware-version 1.5.4
+```
+
+This command was **not run** during implementation. The 70-test offline suite
+passes, including commissioning on an unverified contract, slow single-run
+return/fade, guard changes, blocked cleanup and no-DDS default mode. Before/after
+subscriber reports are saved under ignored `output/arm_commissioning/`.
+Neither these reports nor SDK publication establishes physical acceptance.
+Battery, collision clearance and external controller ownership are not currently
+automatically observed by this subscriber interface; operator checks remain
+necessary. The handoff and tracking tolerance still require secured acceptance.
+
+The earlier review below records the rationale and remaining hardware work;
+claims of missing commissioning/tracking/stop infrastructure are superseded by
+this implementation status.
+
+## Biped-specific constraint
+
+G1 is a biped, not a wheeled base. Any walking-stop adapter must preserve the
+standing/balance controller: no damping command, motor disable, posture switch,
+or leg command is authorized by this arm workflow. Zero observed translational
+speed is not proof of balance or safe support. On-site setup must follow the
+robot's approved operating procedure; this checklist does not prescribe an
+improvised restraint. Arm authority release also requires a verified handoff to
+the standing controller, rather than assuming zero authority is physically safe.
+
+## Implemented execution protections
+
+The executor now checks measured arm positions against the previous command
+each cycle (including the start transition and final commanded frame), using
+the existing 0.01 rad threshold. This is conservative, has no lag compensation,
+and is not a hardware-validated tolerance. State freshness, finite positions,
+joint limits, and model mode are also checked at the workflow boundary.
+
+Start and playback loops abort if more than one 20 ms control period late,
+rather than bursting catch-up commands. Initial state discovery has a separate
+5 s timeout. Arm release and walking-stop callbacks run independently with a
+shared 1 s cleanup wait budget; both are attempted on every exit. Failed or
+timed-out cleanup retains the motion lease, and an original execution exception
+is preserved. Timed-out daemon callbacks may continue running; do not reset the
+lease or start another controller until operator recovery establishes safety.
+Callback completion still does not establish a physical stop or safe handoff.
+
+## Hardware acceptance remains pending
+
+Keep `asset/g1_arm_contract.json` at `hardware_verified: false` until acceptance.
 Speech acceptance and the earlier read-only preflight do not authorize movement.
 No robot commands were sent during this review.
 
@@ -41,14 +118,12 @@ do not describe the existing four-second playback as an accepted slow test.
   callback and checks arm faults/temperature; the composition root only provides
   dry-run wiring. Establish battery, active-controller/action ownership, and
   required localization policy, rejecting unavailable required evidence.
-- **Tracking and timing:** `max_tracking_error_radians=0.01` is loaded but not
-  enforced against measured motion by the executor. Implement and test tracking
-  checks with a reviewed tolerance and sampling policy. Abort control-loop
-  overruns instead of allowing rapid catch-up publication. Separate initial DDS
-  discovery timeout from the 0.2 s sample-freshness limit in action execution.
+- **Tracking and timing:** checks and regression tests are now implemented as
+  described above. Review tolerance, real DDS sampling/latency and scheduling
+  policy before commissioning; fake tracking is not physical validation.
 - **Stop and handoff:** validate independent bounded base-stop and arm-release
-  paths. Today a blocking base-stop callback can delay arm release; failures can
-  also obscure the original error. Observe and report final state after normal
+  paths. Independent bounded cleanup attempts are implemented, but the actual
+  biped-safe adapters and handoff are not validated. Observe and report final state after normal
   completion, cancellation, stale state, and faults. Publishing zero authority
   is not evidence of a safe physical handoff or a confirmed stop.
 - **Command contract and workspace:** review the exact firmware's authority-field
@@ -84,6 +159,5 @@ do not describe the existing four-second playback as an accepted slow test.
    exact model/firmware contract can be marked hardware-verified. A single
    successful gesture does not validate other trajectories or navigation.
 
-No live command is supplied here because the commissioning gate and required
-interlocks are not yet implemented. Next work is offline implementation, not
-asking the operator to unlock the present executor.
+Use only the scoped entry point above for commissioning; do not unlock general
+execution or run the vendored full example (which includes waist joints).
