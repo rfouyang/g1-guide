@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-17T09:58:23Z
+Updated: 2026-09-17T10:01:08Z
 
 ## Status
 
@@ -325,6 +325,12 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Session Checkpoint
 
+- The 2026-09-17T10:01:08Z offline arm review produced
+  `doc/arm_acceptance.md`. `present_left` dry-run passed: 101 samples, 4 s,
+  maximum sampled velocity 1.284879 rad/s and acceleration 1.975351 rad/s².
+  All 54 unit tests passed; application demo, `uv lock --check`, compile check,
+  and `git diff --check` passed. No live DDS or motion command was used in this
+  review; hardware verification remains false.
 - The audio acceptance process exited at 2026-09-17 17:57 CST. No motion
   command was issued. Earlier diagnostic subscriber cleanup was not conclusively
   verified across process namespaces; do not assume all earlier readers exited.
@@ -352,12 +358,14 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Next Actions
 
-1. Prepare the Phase 2 arm-motion acceptance procedure and review the live
-   execution interlocks; obtain fresh robot state and per-run operator
-   confirmation before any physical motion.
-2. Review the provisional action gains and limits with an on-site operator, then
-   perform a secured, low-speed `present_left` test with physical emergency-stop
-   coverage. Only after that evidence may `hardware_verified` become true.
+1. Close the offline implementation gates in `doc/arm_acceptance.md`: scoped
+   commissioning authorization, continuous state policy, tracking/timing checks,
+   bounded stop/release and final-state observation. Do not unlock the current
+   executor by setting `hardware_verified=true` before acceptance.
+2. After these gates close, review gains, reduced-speed profile and both arms'
+   workspace with an on-site operator. Obtain fresh robot state and per-run
+   confirmation for a secured `present_left` test with physical emergency-stop
+   coverage. Only after evidence review may `hardware_verified` become true.
 3. Retune or regenerate `concierge_speak_v1`; do not bypass its current velocity
    rejection.
 4. Only after the stationary presentation is reliable, populate
@@ -366,6 +374,10 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Blockers
 
+- The live-execution review found that configured tracking-error limits are not
+  enforced by the executor, continuous FSM checks are not wired, stop callbacks
+  can delay arm release, and there is no separate first-run commissioning gate.
+  See `doc/arm_acceptance.md`; the candidate is not ready for physical playback.
 - The target identity and read-only state contract are observed, but the file
   contract remains explicitly unverified for command execution until a secured
   low-speed motion acceptance is reviewed on site.
