@@ -43,6 +43,7 @@ class ActionPreflightApplication:
         state_reader = G1ActionStateHelper(
             network_interface=arguments.interface,
             state_timeout=safety_limits.state_timeout_seconds,
+            fsm_state_topic=arguments.fsm_state_topic,
             motion_state_topic=arguments.motion_state_topic,
         )
         service = ActionPreflightService(
@@ -86,12 +87,14 @@ class ActionPreflightApplication:
         parser.add_argument("--observed-model-id")
         parser.add_argument("--observed-firmware-version")
         parser.add_argument(
+            "--fsm-state-topic",
+            default=G1ActionStateHelper.FSM_STATE_TOPIC,
+            help="read-only G1 locomotion FSM state topic",
+        )
+        parser.add_argument(
             "--motion-state-topic",
             default=G1ActionStateHelper.MOTION_STATE_TOPIC,
-            help=(
-                "read-only base state topic; use rt/lf/sportmodestate only "
-                "when verified on the target firmware"
-            ),
+            help="read-only G1 odometry state topic used for base velocities",
         )
         parser.add_argument("--output", type=Path)
         parsed_arguments = parser.parse_args()

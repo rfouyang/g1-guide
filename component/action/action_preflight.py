@@ -15,6 +15,7 @@ from loguru import logger
 from component.action.action_trajectory import ActionSafetyLimits, G1ArmContract
 from util.g1_helper.g1_action_helper.action_state_helper import (
     G1ActionStateObservation,
+    G1FsmStateObservation,
     G1LowStateObservation,
     G1MotionStateObservation,
 )
@@ -25,7 +26,9 @@ class ActionStateReader(Protocol):
 
     network_interface: str
     low_state_topic: str
+    fsm_state_topic: str
     motion_state_topic: str
+    fsm_state_schema: str
     motion_state_schema: str
 
     def connect(self) -> None: ...
@@ -53,7 +56,9 @@ class ActionPreflightReport:
     read_only: bool
     network_interface: str
     low_state_topic: str
+    fsm_state_topic: str
     motion_state_topic: str
+    fsm_state_schema: str
     motion_state_schema: str
     identity_source: str
     expected_model_id: str
@@ -65,13 +70,19 @@ class ActionPreflightReport:
     low_state_tick: int
     mode_pr: int
     mode_machine: int
+    fsm_id: int
+    fsm_mode: int
+    fsm_task_id: int
+    fsm_task_time: float
     motion_mode: int
     motion_error_code: int
     motor_count: int
     low_state_age_seconds: float
+    fsm_state_age_seconds: float
     motion_state_age_seconds: float
     base_linear_velocity: tuple[float, float, float]
     base_yaw_speed: float
+    initial_state_wait_seconds: float
     max_state_age_seconds: float
     max_motor_temperature_celsius: int
     max_stationary_linear_speed: float
@@ -88,7 +99,10 @@ class ActionPreflightReport:
 class ActionPreflightService:
     """Record action safety evidence without publishing a robot command."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 3
+    DEFAULT_INITIAL_STATE_WAIT_SECONDS = 5.0
+    SUPPORTED_ACTION_FSM_IDS = (500, 501, 801)
+    SUPPORTED_FSM_801_MODES = (0, 3)
 
     def __init__(
         self,
@@ -105,8 +119,21 @@ class ActionPreflightService:
             "utc_now",
             lambda: datetime.now(timezone.utc),
         )
+        self.initial_state_wait_seconds = float(
+            kwargs.get(
+                "initial_state_wait_seconds",
+                self.DEFAULT_INITIAL_STATE_WAIT_SECONDS,
+            )
+        )
         if not callable(self.clock) or not callable(self.utc_now):
             raise TypeError("clock and utc_now must be callable")
+        if (
+            not math.isfinite(self.initial_state_wait_seconds)
+            or self.initial_state_wait_seconds <= 0.0
+        ):
+            raise ValueError(
+                "initial_state_wait_seconds must be finite and positive"
+            )
 
     def inspect(
         self,
@@ -122,10 +149,11 @@ class ActionPreflightService:
 
         self.state_reader.connect()
         state = self.state_reader.wait_for_state(
-            self.safety_limits.state_timeout_seconds
+            self.initial_state_wait_seconds
         )
         observed_at = float(self.clock())
         low_state_age = observed_at - state.low_state.received_at
+        fsm_state_age = observed_at - state.fsm_state.received_at
         motion_state_age = observed_at - state.motion_state.received_at
         arm_motors = self._arm_motor_observations(state.low_state)
         failures = self._failures(
@@ -133,6 +161,7 @@ class ActionPreflightService:
             normalized_firmware,
             state,
             low_state_age,
+            fsm_state_age,
             motion_state_age,
             arm_motors,
         )
@@ -142,7 +171,9 @@ class ActionPreflightService:
             read_only=True,
             network_interface=self.state_reader.network_interface,
             low_state_topic=self.state_reader.low_state_topic,
+            fsm_state_topic=self.state_reader.fsm_state_topic,
             motion_state_topic=self.state_reader.motion_state_topic,
+            fsm_state_schema=self.state_reader.fsm_state_schema,
             motion_state_schema=self.state_reader.motion_state_schema,
             identity_source="operator_input",
             expected_model_id=self.contract.robot_model_id,
@@ -154,13 +185,19 @@ class ActionPreflightService:
             low_state_tick=state.low_state.tick,
             mode_pr=state.low_state.mode_pr,
             mode_machine=state.low_state.mode_machine,
+            fsm_id=state.fsm_state.fsm_id,
+            fsm_mode=state.fsm_state.fsm_mode,
+            fsm_task_id=state.fsm_state.task_id,
+            fsm_task_time=state.fsm_state.task_time,
             motion_mode=state.motion_state.mode,
             motion_error_code=state.motion_state.error_code,
             motor_count=len(state.low_state.positions),
             low_state_age_seconds=low_state_age,
+            fsm_state_age_seconds=fsm_state_age,
             motion_state_age_seconds=motion_state_age,
             base_linear_velocity=state.motion_state.linear_velocity,
             base_yaw_speed=state.motion_state.yaw_speed,
+            initial_state_wait_seconds=self.initial_state_wait_seconds,
             max_state_age_seconds=self.safety_limits.state_timeout_seconds,
             max_motor_temperature_celsius=(
                 self.safety_limits.max_motor_temperature
@@ -232,6 +269,7 @@ class ActionPreflightService:
         observed_firmware_version: str | None,
         state: G1ActionStateObservation,
         low_state_age: float,
+        fsm_state_age: float,
         motion_state_age: float,
         arm_motors: tuple[ArmMotorObservation, ...],
     ) -> tuple[str, ...]:
@@ -243,11 +281,24 @@ class ActionPreflightService:
         if state.low_state.mode_machine != self.contract.mode_machine:
             failures.append("mode_machine does not match the arm contract")
         self._append_freshness_failure(failures, low_state_age, "low state")
+        self._append_freshness_failure(failures, fsm_state_age, "FSM state")
         self._append_freshness_failure(
             failures,
             motion_state_age,
             "motion state",
         )
+        if state.fsm_state.fsm_id not in self.SUPPORTED_ACTION_FSM_IDS:
+            failures.append(
+                f"FSM id {state.fsm_state.fsm_id} does not support G1 arm actions"
+            )
+        if (
+            state.fsm_state.fsm_id == 801
+            and state.fsm_state.fsm_mode not in self.SUPPORTED_FSM_801_MODES
+        ):
+            failures.append(
+                f"FSM 801 mode {state.fsm_state.fsm_mode} does not support "
+                "G1 arm actions"
+            )
         if state.motion_state.error_code != 0:
             failures.append(
                 f"motion state reports error code {state.motion_state.error_code}"
@@ -338,7 +389,9 @@ class DemoActionStateReader:
         self.observation = observation
         self.network_interface = "offline-demo"
         self.low_state_topic = "offline/lowstate"
-        self.motion_state_topic = "offline/sportmodestate"
+        self.fsm_state_topic = "offline/fsm_state"
+        self.motion_state_topic = "offline/odommodestate"
+        self.fsm_state_schema = "offline-demo"
         self.motion_state_schema = "offline-demo"
 
     def connect(self) -> None:
@@ -365,6 +418,13 @@ def demo_action_preflight() -> None:
             positions=(0.0,) * 29,
             temperatures=(25,) * 29,
             motor_faults=(0,) * 29,
+        ),
+        fsm_state=G1FsmStateObservation(
+            received_at=observed_at,
+            fsm_id=501,
+            fsm_mode=0,
+            task_id=4,
+            task_time=0.0,
         ),
         motion_state=G1MotionStateObservation(
             received_at=observed_at,

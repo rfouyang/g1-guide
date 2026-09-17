@@ -34,6 +34,14 @@ class FakeMotionState:
         self.yaw_speed = 0.003
 
 
+class FakeFsmState:
+    def __init__(self) -> None:
+        self.fsm_id = 501
+        self.fsm_mode = 0
+        self.task_id = 4
+        self.task_time = 0.0
+
+
 class FakeSubscriber:
     def __init__(self, topic: str) -> None:
         self.topic = topic
@@ -70,12 +78,13 @@ class FakeSubscriberBoundary:
             channel_initializer=self.initialize,
             subscriber_factory=self.subscriber_factory,
             low_state_type=FakeLowState,
+            fsm_state_type=FakeFsmState,
             motion_state_type=FakeMotionState,
         )
 
 
 class G1ActionStateHelperTests(unittest.TestCase):
-    def test_connects_only_two_read_only_state_subscribers(self) -> None:
+    def test_connects_only_three_read_only_state_subscribers(self) -> None:
         boundary = FakeSubscriberBoundary()
         helper = G1ActionStateHelper(
             "eth0",
@@ -85,17 +94,20 @@ class G1ActionStateHelperTests(unittest.TestCase):
 
         helper.connect()
         boundary.subscribers[helper.low_state_topic].emit(FakeLowState())
+        boundary.subscribers[helper.fsm_state_topic].emit(FakeFsmState())
         boundary.subscribers[helper.motion_state_topic].emit(FakeMotionState())
         observation = helper.wait_for_state(0.1)
 
         self.assertEqual(boundary.channel_calls, [(0, "eth0")])
         self.assertEqual(
             set(boundary.subscribers),
-            {"rt/lowstate", "rt/sportmodestate"},
+            {"rt/lowstate", "rt/sportmodestate", "rt/odommodestate"},
         )
         self.assertEqual(observation.low_state.version, (1, 2))
         self.assertEqual(observation.low_state.mode_machine, 5)
         self.assertEqual(len(observation.low_state.positions), 35)
+        self.assertEqual(observation.fsm_state.fsm_id, 501)
+        self.assertEqual(observation.fsm_state.fsm_mode, 0)
         self.assertEqual(
             observation.motion_state.linear_velocity,
             (0.001, -0.002, 0.0),
@@ -111,11 +123,29 @@ class G1ActionStateHelperTests(unittest.TestCase):
         )
         helper.connect()
         boundary.subscribers[helper.low_state_topic].emit(FakeLowState())
+        boundary.subscribers[helper.fsm_state_topic].emit(FakeFsmState())
         malformed_motion = FakeMotionState()
         malformed_motion.velocity = [float("nan"), 0.0, 0.0]
         boundary.subscribers[helper.motion_state_topic].emit(malformed_motion)
 
         with self.assertRaisesRegex(TimeoutError, "motion state"):
+            helper.wait_for_state(0.001)
+
+    def test_malformed_fsm_state_is_rejected(self) -> None:
+        boundary = FakeSubscriberBoundary()
+        helper = G1ActionStateHelper(
+            "eth0",
+            bindings=boundary.bindings(),
+            clock=lambda: 10.0,
+        )
+        helper.connect()
+        boundary.subscribers[helper.low_state_topic].emit(FakeLowState())
+        malformed_fsm = FakeFsmState()
+        malformed_fsm.task_time = float("nan")
+        boundary.subscribers[helper.fsm_state_topic].emit(malformed_fsm)
+        boundary.subscribers[helper.motion_state_topic].emit(FakeMotionState())
+
+        with self.assertRaisesRegex(TimeoutError, "FSM state"):
             helper.wait_for_state(0.001)
 
     def test_malformed_low_state_is_rejected(self) -> None:
@@ -129,6 +159,7 @@ class G1ActionStateHelperTests(unittest.TestCase):
         malformed_low_state = FakeLowState()
         malformed_low_state.version = [1]
         boundary.subscribers[helper.low_state_topic].emit(malformed_low_state)
+        boundary.subscribers[helper.fsm_state_topic].emit(FakeFsmState())
         boundary.subscribers[helper.motion_state_topic].emit(FakeMotionState())
 
         with self.assertRaisesRegex(TimeoutError, "low state"):
@@ -145,6 +176,7 @@ class G1ActionStateHelperTests(unittest.TestCase):
         )
         helper.connect()
         boundary.subscribers[helper.low_state_topic].emit(FakeLowState())
+        boundary.subscribers[helper.fsm_state_topic].emit(FakeFsmState())
         boundary.subscribers[helper.motion_state_topic].emit(FakeMotionState())
         current_time[0] = 10.3
 

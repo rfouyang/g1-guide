@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-17 17:34 CST
+Updated: 2026-09-17 17:52 CST
 
 ## Status
 
@@ -19,14 +19,15 @@ low-level `rt/arm_sdk` adapter is injectable and tested, but live execution is
 locked by `hardware_verified: false`; no motion command has been sent. ROS and
 navigation code have not been scaffolded.
 
-A strictly read-only Phase 2 action preflight is now implemented offline. Its
-low-level boundary constructs subscribers only for `rt/lowstate` and
-`rt/sportmodestate`; it has no publisher factory or command API. The workflow
-records an independently observed model and firmware version, DDS schema and
-topics, state ages, modes, motor count, all 14 allowlisted arm positions,
-temperatures and faults, plus observed linear and yaw speed in an atomic JSON
-report under `output/action_preflight/`. It does not change
-`hardware_verified`, and it has not yet been run against the target G1.
+A strictly read-only Phase 2 action preflight is implemented and has passed on
+the target G1. Its low-level boundary constructs subscribers only for
+`rt/lowstate`, the HG locomotion FSM on `rt/sportmodestate`, and the GO odometry
+payload on `rt/odommodestate`; it has no publisher factory or command API. The
+workflow records an independently observed model and firmware version, DDS
+schemas and topics, state ages, FSM, motor count, all 14 allowlisted arm
+positions, temperatures and faults, plus observed linear and yaw speed in an
+atomic JSON report under `output/action_preflight/`. It does not change
+`hardware_verified`.
 
 The first live BytePlus-to-G1 test completed successfully on `eth0`: BytePlus
 returned 217,256 PCM bytes and the G1 audio stream accepted the full playback.
@@ -246,6 +247,29 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   cancellation after a submitted chunk, partial-byte evidence, `PlayStop`, fresh
   IDs and cleanup across repeated playback, and propagation of the shared
   cancellation signal through the guide component.
+- The target G1 was observed on `eth0` at `192.168.123.161` from the development
+  host `192.168.123.164`; the operator identified it as the 29-DOF fake-hand G1
+  running firmware 1.5.4.
+- Read-only DDS discovery established the firmware 1.5.4 state contract:
+  `rt/sportmodestate` and `rt/lf/sportmodestate` publish
+  `unitree_hg.msg.dds_.SportModeState_`, while `rt/odommodestate` publishes
+  `unitree_go.msg.dds_.SportModeState_`. The pinned Python SDK lacked the HG
+  sport-state class, so a project-owned low-level helper now implements the exact
+  four-field XTypes contract and has a CDR round-trip regression test.
+- Split initial DDS discovery from the 0.2-second freshness threshold. Preflight
+  waits up to 5 seconds for the first complete state set while still rejecting
+  any sample older than 0.2 seconds.
+- The subscriber-only live preflight passed at 2026-09-17T09:49:36Z. It observed
+  `mode_machine=5`, FSM 501/mode 0, 35 motor slots, all 14 arm faults at zero,
+  maximum observed arm temperature 51 C, zero linear velocity, and yaw speed
+  approximately 0.00107 rad/s. No control publisher was constructed and no
+  motion command was sent. The ignored runtime report is
+  `output/action_preflight/action_preflight_20260917T094936Z.json`.
+- The post-integration default suite ran 54 tests: 53 passed and the optional
+  CycloneDDS CDR test skipped because the default environment excludes hardware
+  dependencies. With `--extra hardware`, all 54 tests passed, including that CDR
+  regression. `uv sync`, `uv lock --check`, compilation of `app`, `component`,
+  and `util`, `git diff --check`, and the four affected safe demos also passed.
 
 ## Current Files
 
@@ -275,7 +299,10 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 - `app/tts_demo.py` — explicit stationary live composition and CLI.
 - `app/action_preflight.py` — safe-by-default read-only target-G1 preflight CLI.
 - `util/g1_helper/g1_action_helper/action_state_helper.py` — low-state and
-  sport-state DDS subscriber boundary with no command publisher.
+  separate HG FSM and GO odometry DDS subscriber boundary with no command
+  publisher.
+- `util/g1_helper/g1_action_helper/g1_sport_mode_state_helper.py` — exact
+  four-field G1 HG sport-state IDL observed from target DDS XTypes.
 - `tests/` — safe foundation unit tests.
 - `third_party/unitree_sdk2_python/` — pinned upstream Unitree SDK source.
 - `third_party/cyclonedds/` — pinned CycloneDDS 0.10.2 source.
@@ -284,8 +311,9 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 
 ## Session Checkpoint
 
-- Work paused in a safe state at 2026-09-17 17:34 CST. No robot, DDS, cloud, ROS,
-  or demo process was left running, and no motion command was issued.
+- Work is in a safe state after the 2026-09-17 17:49 CST read-only preflight. No
+  robot control, cloud, ROS, or demo process was left running, and no motion
+  command was issued.
 - Phase 1 speech generation and one complete file-based G1 playback are working.
   The current reusable test asset is `data/tts/welcome_bilingual.wav`.
 - Live TTS now discovers the G1-facing interface from the
@@ -301,42 +329,33 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   complete for `present_left`: recorder data,
   schema validation, 14-arm normalization, dry-run sequencing, cancellation,
   motion leasing, and the injectable SDK boundary are covered by tests.
-- Live arm execution remains fail-closed. The read-only preflight implementation
-  is complete offline, but it still needs a target-robot run confirming the
-  independently observed model/firmware, DDS schema, `mode_machine`, motor
-  health, temperatures, and zero base speed. Do not begin physical playback
-  during that step or change `hardware_verified` from `false`.
-- The pinned Python SDK exposes only
-  `unitree_go.msg.dds_.SportModeState_`; official Unitree material names
-  `rt/sportmodestate` for G1, but the exact target firmware compatibility must be
-  established by the first live read-only run.
+- Live arm execution remains fail-closed. The target-robot read-only preflight
+  passed for firmware 1.5.4, but physical playback has not been authorized or
+  attempted and `hardware_verified` remains `false`.
+- Target DDS compatibility is now established with separate HG FSM and GO
+  odometry schemas; the preflight rejects unsupported action FSM values and
+  non-stationary odometry.
 
 ## Next Actions
 
 1. Verify cancellation and repeated playback on the stationary G1 before
    accepting the Phase 1 gate; the offline implementation and tests are complete.
-2. Run the read-only G1 action preflight on the stationary target. Record the
-   independently observed model and firmware, verify that the target publishes
-   the configured motion-state schema/topic, and review the saved report. Do not
-   publish an arm or locomotion command during this step.
-3. Review the provisional action gains and limits with an on-site operator, then
+2. Review the provisional action gains and limits with an on-site operator, then
    perform a secured, low-speed `present_left` test with physical emergency-stop
    coverage. Only after that evidence may `hardware_verified` become true.
-4. Retune or regenerate `concierge_speak_v1`; do not bypass its current velocity
+3. Retune or regenerate `concierge_speak_v1`; do not bypass its current velocity
    rejection.
-5. Only after the stationary presentation is reliable, populate
+4. Only after the stationary presentation is reliable, populate
    `~/workspace/services/g1_ws/src/` and reproduce FAST-LIO2 mapping,
    localization, and the reference ROS 1 navigation stack.
 
 ## Blockers
 
-- Exact target G1 hardware and firmware contract is not yet observed on hardware;
-  the file contract therefore remains explicitly unverified.
-- The pinned Python SDK's `unitree_go` motion-state type must be proven compatible
-  with the target G1 `rt/sportmodestate` payload before its velocity evidence is
-  accepted.
-- Provisional arm gains, velocity/acceleration limits, state timeout, and motor
-  temperature cutoff require secured hardware validation.
+- The target identity and read-only state contract are observed, but the file
+  contract remains explicitly unverified for command execution until a secured
+  low-speed motion acceptance is reviewed on site.
+- Provisional arm gains, velocity/acceleration limits, and motor temperature
+  cutoff require secured hardware validation.
 - The exact Livox model, extrinsics, and machine/network configuration are not yet
   recorded.
 - FAST-LIO2 saved-map relocalization and rotation stability are not yet validated

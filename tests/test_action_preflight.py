@@ -11,6 +11,7 @@ from component.action.action_preflight import ActionPreflightService
 from component.action.action_trajectory import ActionSafetyLimits, G1ArmContract
 from util.g1_helper.g1_action_helper.action_state_helper import (
     G1ActionStateObservation,
+    G1FsmStateObservation,
     G1LowStateObservation,
     G1MotionStateObservation,
 )
@@ -21,7 +22,9 @@ class FakeActionStateReader:
         self.observation = observation
         self.network_interface = "eth0"
         self.low_state_topic = "rt/lowstate"
-        self.motion_state_topic = "rt/sportmodestate"
+        self.fsm_state_topic = "rt/sportmodestate"
+        self.motion_state_topic = "rt/odommodestate"
+        self.fsm_state_schema = "unitree_hg.msg.dds_.SportModeState_"
         self.motion_state_schema = "unitree_go.msg.dds_.SportModeState_"
         self.connect_count = 0
         self.wait_timeouts: list[float] = []
@@ -66,7 +69,7 @@ class ActionPreflightServiceTests(unittest.TestCase):
         self.assertEqual(reader.connect_count, 1)
         self.assertEqual(
             reader.wait_timeouts,
-            [self.limits.state_timeout_seconds],
+            [ActionPreflightService.DEFAULT_INITIAL_STATE_WAIT_SECONDS],
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             report_path = Path(temporary_directory) / "preflight.json"
@@ -74,7 +77,9 @@ class ActionPreflightServiceTests(unittest.TestCase):
             report_payload = json.loads(saved_path.read_text(encoding="utf-8"))
             temporary_files = list(saved_path.parent.glob(".*.tmp"))
 
-        self.assertEqual(report_payload["schema_version"], 1)
+        self.assertEqual(report_payload["schema_version"], 3)
+        self.assertEqual(report_payload["initial_state_wait_seconds"], 5.0)
+        self.assertEqual(report_payload["fsm_id"], 501)
         self.assertEqual(report_payload["recorded_at_utc"], "2026-09-17T09:00:00Z")
         self.assertEqual(report_payload["failures"], [])
         self.assertEqual(temporary_files, [])
@@ -102,8 +107,17 @@ class ActionPreflightServiceTests(unittest.TestCase):
             linear_velocity=(0.02, 0.0, 0.0),
             yaw_speed=0.02,
         )
+        unsafe_fsm_state = replace(
+            healthy.fsm_state,
+            received_at=self.observed_at - 1.0,
+            fsm_id=999,
+        )
         reader = FakeActionStateReader(
-            G1ActionStateObservation(unsafe_low_state, unsafe_motion_state)
+            G1ActionStateObservation(
+                unsafe_low_state,
+                unsafe_fsm_state,
+                unsafe_motion_state,
+            )
         )
         service = self._service(reader)
 
@@ -116,6 +130,8 @@ class ActionPreflightServiceTests(unittest.TestCase):
         self.assertIn("mode_machine", failure_text)
         self.assertIn("low state is stale", failure_text)
         self.assertIn("motion state is stale", failure_text)
+        self.assertIn("FSM state is stale", failure_text)
+        self.assertIn("FSM id 999", failure_text)
         self.assertIn("error code 42", failure_text)
         self.assertIn("fewer than 29", failure_text)
         self.assertIn("not all allowlisted", failure_text)
@@ -133,6 +149,36 @@ class ActionPreflightServiceTests(unittest.TestCase):
             service.inspect("  ")
 
         self.assertEqual(reader.connect_count, 0)
+
+    def test_initial_state_wait_must_be_positive(self) -> None:
+        reader = FakeActionStateReader(self._healthy_observation())
+
+        with self.assertRaisesRegex(ValueError, "initial_state_wait_seconds"):
+            ActionPreflightService(
+                contract=self.contract,
+                safety_limits=self.limits,
+                state_reader=reader,
+                initial_state_wait_seconds=0.0,
+            )
+
+    def test_fsm_801_rejects_unsupported_mode(self) -> None:
+        healthy = self._healthy_observation()
+        unsupported_fsm = replace(
+            healthy.fsm_state,
+            fsm_id=801,
+            fsm_mode=2,
+        )
+        reader = FakeActionStateReader(
+            replace(healthy, fsm_state=unsupported_fsm)
+        )
+
+        report = self._service(reader).inspect(
+            self.contract.robot_model_id,
+            "1.5.4",
+        )
+
+        self.assertFalse(report.passed)
+        self.assertIn("FSM 801 mode 2", "\n".join(report.failures))
 
     def _healthy_observation(self) -> G1ActionStateObservation:
         positions = [0.0] * 35
@@ -153,7 +199,18 @@ class ActionPreflightServiceTests(unittest.TestCase):
             linear_velocity=(0.0, 0.0, 0.0),
             yaw_speed=0.0,
         )
-        observation = G1ActionStateObservation(low_state, motion_state)
+        fsm_state = G1FsmStateObservation(
+            received_at=self.observed_at,
+            fsm_id=501,
+            fsm_mode=0,
+            task_id=4,
+            task_time=0.0,
+        )
+        observation = G1ActionStateObservation(
+            low_state,
+            fsm_state,
+            motion_state,
+        )
         return observation
 
     def _service(

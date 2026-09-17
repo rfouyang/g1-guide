@@ -18,8 +18,9 @@ joints. Live arm publication remains locked until the target robot contract is
 verified on secured hardware.
 
 The action preflight is a separate subscriber-only path. It observes
-`rt/lowstate` and `rt/sportmodestate`, records the allowlisted arm motor health
-and base velocity, and never constructs an arm or locomotion command client.
+`rt/lowstate`, the G1 HG FSM on `rt/sportmodestate`, and base odometry on
+`rt/odommodestate`. It records the allowlisted arm motor health, supported action
+FSM, and base velocity, and never constructs an arm or locomotion command client.
 
 ## Development
 
@@ -64,9 +65,10 @@ uv run --extra hardware python -m app.action_preflight \
   --observed-firmware-version '<version shown on the target robot>'
 ```
 
-The default base-state topic is `rt/sportmodestate`. If the target firmware is
-independently shown to publish only its low-frequency form, pass
-`--motion-state-topic rt/lf/sportmodestate`; the selected topic is recorded in
+The default FSM topic is `rt/sportmodestate`, using the G1
+`unitree_hg.msg.dds_.SportModeState_` schema observed on firmware 1.5.4. The
+default velocity source is `rt/odommodestate`, using
+`unitree_go.msg.dds_.SportModeState_`. Both topics and schemas are recorded in
 the report.
 
 The report is written atomically under `output/action_preflight/` and remains a
