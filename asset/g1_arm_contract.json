@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "robot_model_id": "unitree_g1_29dof_rev_1_0_fake_hand",
+  "mode_machine": 5,
+  "hardware_verified": false,
+  "source_joint_names": [
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "arm_joints": [
+    {"name": "left_shoulder_pitch_joint", "dds_index": 15, "lower": -3.0892, "upper": 2.6704},
+    {"name": "left_shoulder_roll_joint", "dds_index": 16, "lower": -1.5882, "upper": 2.2515},
+    {"name": "left_shoulder_yaw_joint", "dds_index": 17, "lower": -2.618, "upper": 2.618},
+    {"name": "left_elbow_joint", "dds_index": 18, "lower": -1.0472, "upper": 2.0944},
+    {"name": "left_wrist_roll_joint", "dds_index": 19, "lower": -1.972222054, "upper": 1.972222054},
+    {"name": "left_wrist_pitch_joint", "dds_index": 20, "lower": -1.614429558, "upper": 1.614429558},
+    {"name": "left_wrist_yaw_joint", "dds_index": 21, "lower": -1.614429558, "upper": 1.614429558},
+    {"name": "right_shoulder_pitch_joint", "dds_index": 22, "lower": -3.0892, "upper": 2.6704},
+    {"name": "right_shoulder_roll_joint", "dds_index": 23, "lower": -2.2515, "upper": 1.5882},
+    {"name": "right_shoulder_yaw_joint", "dds_index": 24, "lower": -2.618, "upper": 2.618},
+    {"name": "right_elbow_joint", "dds_index": 25, "lower": -1.0472, "upper": 2.0944},
+    {"name": "right_wrist_roll_joint", "dds_index": 26, "lower": -1.972222054, "upper": 1.972222054},
+    {"name": "right_wrist_pitch_joint", "dds_index": 27, "lower": -1.614429558, "upper": 1.614429558},
+    {"name": "right_wrist_yaw_joint", "dds_index": 28, "lower": -1.614429558, "upper": 1.614429558}
+  ],
+  "command_topic": "rt/arm_sdk",
+  "state_topic": "rt/lowstate",
+  "authority_index": 29,
+  "model_source": {
+    "repository": "https://github.com/unitreerobotics/unitree_ros",
+    "commit": "7d6075f7f58588b189b940130e3edab3c839b2df"
+  },
+  "dds_index_source": {
+    "repository": "https://github.com/unitreerobotics/unitree_mujoco",
+    "commit": "1eb6642e3f3fdfb7fb13a9794fd6a2dd93ea0e7d"
+  }
+}

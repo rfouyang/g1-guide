@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "control_frequency_hz": 50.0,
+  "state_timeout_seconds": 0.2,
+  "transition_seconds": 2.0,
+  "arm_kp": 40.0,
+  "arm_kd": 1.0,
+  "max_velocity_radians_per_second": 1.5,
+  "max_acceleration_radians_per_second_squared": 3.0,
+  "max_tracking_error_radians": 0.01,
+  "max_motor_temperature_celsius": 70
+}

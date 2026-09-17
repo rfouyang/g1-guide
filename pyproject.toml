@@ -1,0 +1,23 @@
+[project]
+name = "g1-guide"
+version = "0.1.0"
+description = "Safe guided-tour application for the Unitree G1"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "loguru>=0.7.3",
+    "numpy>=2.2.6",
+    "python-dotenv>=1.2.3",
+    "requests>=2.34.2",
+]
+
+[project.optional-dependencies]
+hardware = [
+    "unitree-sdk2py",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+unitree-sdk2py = { path = "third_party/unitree_sdk2_python", editable = true }
