@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import signal
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
+from uuid import uuid4
 
 from loguru import logger
 
@@ -70,6 +74,7 @@ class ArmCommissioningApplication:
         )
         previous_int = signal.signal(signal.SIGINT, self.request_cancel)
         previous_term = signal.signal(signal.SIGTERM, self.request_cancel)
+        execution = None
         try:
             print("Single present_left: 4x duration, return to initial arms, fade authority; Ctrl-C cancels")
             execution = service.execute(
@@ -79,19 +84,64 @@ class ArmCommissioningApplication:
             print(execution)
         finally:
             execution_failed = sys.exc_info()[0] is not None
+            execution_error = sys.exc_info()[1]
             signal.signal(signal.SIGINT, previous_int)
             signal.signal(signal.SIGTERM, previous_term)
+            # Keep the actual rejecting snapshot before acquiring any new state.
+            try:
+                if guard.last_report is not None and not guard.last_report.passed:
+                    preflight.save(
+                        guard.last_report, report_directory / f"{stamp}_rejected.json"
+                    )
+                self.save_execution_evidence(
+                    report_directory / f"{stamp}_execution.json", arm_client,
+                    execution_error, completed=execution is not None and not execution.cancelled,
+                )
+            except Exception:
+                logger.exception("Could not persist commissioning execution evidence")
+                # Continue to acquire final robot state even if storage failed.
             # Preserve failed observations too; a publication is not a stop ACK.
             try:
                 report = preflight.inspect(guard.model_id, guard.firmware)
                 preflight.save(report, report_directory / f"{stamp}_after.json")
-                print(f"Observed final state saved; preflight passed={report.passed}")
+                print(
+                    f"Final snapshot saved; generic preflight passed={report.passed}. "
+                    "This is not commissioning or physical handoff acceptance."
+                )
                 if not report.passed:
                     raise RuntimeError("Final state failed preflight; operator recovery required")
             except Exception:
                 logger.exception("Final state not established; operator recovery required")
                 if not execution_failed:
                     raise
+
+    def save_execution_evidence(
+        self, path: Path, arm_client: G1ArmSdkHelper,
+        error: BaseException | None, *, completed: bool,
+    ) -> None:
+        evidence = {
+            "schema_version": 1,
+            "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+            "action_name": "present_left",
+            "execution_completed": completed,
+            "error_type": type(error).__name__ if error is not None else None,
+            "error": str(error) if error is not None else None,
+            "position_commands_published": arm_client.position_commands_published,
+            "release_commands_published": arm_client.release_commands_published,
+            "publication_is_physical_acknowledgement": False,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+            os.replace(temporary_path, path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        logger.info(
+            "Arm publication counts: positions={}, releases={}; evidence={}",
+            arm_client.position_commands_published,
+            arm_client.release_commands_published, path,
+        )
 
     def parse_arguments(self) -> argparse.Namespace:
         parser = argparse.ArgumentParser(description="Single G1 two-arm commissioning")

@@ -70,6 +70,20 @@ class ActionPreflightServiceTests(unittest.TestCase):
             guard.check()
         self.assertEqual(reader.connect_count, 0)
 
+    def test_commissioning_rejection_retains_exact_mode_snapshot(self) -> None:
+        observation = self._healthy_observation()
+        reader = FakeActionStateReader(replace(
+            observation, fsm_state=replace(observation.fsm_state, fsm_id=501, fsm_mode=1)
+        ))
+        service = self._service(reader)
+        self.assertTrue(service.inspect(self.contract.robot_model_id, "1.5.4").passed)
+        guard = CommissioningGuard(service, self.contract.robot_model_id, "1.5.4")
+        with self.assertRaisesRegex(RuntimeError, "observed FSM 501/1"):
+            guard.check()
+        self.assertFalse(guard.last_report.passed)
+        self.assertEqual(guard.last_report.fsm_mode, 1)
+        self.assertIn("observed FSM 501/1", guard.last_report.failures[-1])
+
     def test_passing_read_only_report_is_saved_atomically(self) -> None:
         reader = FakeActionStateReader(self._healthy_observation())
         service = self._service(reader)

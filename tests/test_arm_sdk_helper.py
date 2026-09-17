@@ -43,13 +43,14 @@ class FakePublisher:
     def __init__(self) -> None:
         self.initialized = False
         self.commands: list[FakeCommand] = []
+        self.write_result = True
 
     def Init(self) -> None:
         self.initialized = True
 
     def Write(self, command: FakeCommand) -> bool:
         self.commands.append(command)
-        return True
+        return self.write_result
 
 
 class FakeSubscriber:
@@ -114,6 +115,8 @@ class G1ArmSdkHelperTests(unittest.TestCase):
         )
 
         command = boundary.publisher.commands[0]
+        self.assertEqual(helper.position_commands_published, 1)
+        self.assertEqual(helper.release_commands_published, 0)
         self.assertEqual(boundary.channel_calls, [(0, "eth0")])
         self.assertEqual(command.mode_pr, 3)
         self.assertEqual(command.mode_machine, 5)
@@ -142,6 +145,8 @@ class G1ArmSdkHelperTests(unittest.TestCase):
         boundary.subscriber.emit(FakeLowState())
 
         helper.release()
+        self.assertEqual(helper.position_commands_published, 0)
+        self.assertEqual(helper.release_commands_published, 1)
 
         command = boundary.publisher.commands[0]
         self.assertEqual(command.motor_cmd[29].q, 0.0)
@@ -149,6 +154,19 @@ class G1ArmSdkHelperTests(unittest.TestCase):
             self.assertEqual(command.motor_cmd[motor_index].q, float(motor_index))
             self.assertEqual(command.motor_cmd[motor_index].kp, 0.0)
             self.assertEqual(command.motor_cmd[motor_index].kd, 0.0)
+
+    def test_failed_publication_does_not_increment_success_counters(self) -> None:
+        boundary = FakeSdkBoundary()
+        helper = G1ArmSdkHelper("eth0", bindings=boundary.bindings(), clock=lambda: 10.0)
+        helper.connect()
+        boundary.subscriber.emit(FakeLowState())
+        boundary.publisher.write_result = False
+        with self.assertRaisesRegex(RuntimeError, "publication failed"):
+            helper.publish_arm_positions([0.0] * 14)
+        with self.assertRaisesRegex(RuntimeError, "publication failed"):
+            helper.release()
+        self.assertEqual(helper.position_commands_published, 0)
+        self.assertEqual(helper.release_commands_published, 0)
 
     def test_stale_state_is_rejected(self) -> None:
         current_time = [10.0]

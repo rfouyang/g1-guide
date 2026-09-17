@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-17T10:13:38Z
+Updated: 2026-09-17T10:37:50Z
 
 ## Status
 
@@ -15,9 +15,11 @@ the native schema-2 NPZ output from `g1-action-recorder`, validates the pinned G
 model and safety limits, removes the three waist columns, and exposes an
 immutable trajectory containing exactly the 14 allowlisted arm joints. The
 application composition root validates `present_left` in dry-run mode. The
-low-level `rt/arm_sdk` adapter is injectable and tested, but live execution is
-locked by `hardware_verified: false`; no motion command has been sent. ROS and
-navigation code have not been scaffolded.
+low-level `rt/arm_sdk` adapter is injectable and tested. Normal live execution is
+locked by `hardware_verified: false`; a separate, explicitly confirmed
+commissioning attempt published to `rt/arm_sdk` but aborted on an FSM guard
+change before completing playback. Its position-command count was not captured.
+ROS and navigation code have not been scaffolded.
 
 A strictly read-only Phase 2 action preflight is implemented and has passed on
 the target G1. Its low-level boundary constructs subscribers only for
@@ -325,6 +327,44 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Session Checkpoint
 
+- Current official Unitree SDK sources name internal-control selector value 1
+  `PASSIVE` and use it as an argument to `SwitchToInternalCtrl`. The same client
+  exposes `GetFsmMode`, but Unitree does not document that the selector enum
+  defines the meaning of `fsm_mode` within FSM 501. The official arm-action
+  client permits FSM 501 without constraining its mode. This evidence makes the
+  observed 501/1 transition safety-sensitive but does not establish that it is a
+  valid custom arm-SDK takeover state. The commissioning guard remains restricted
+  to the previously observed 501/0 state; no retry or robot command was issued.
+- After adding exact rejection evidence and publication counters, all 73 unit
+  tests, compilation, `uv lock --check`, `git diff --check`, and the offline arm
+  commissioning, preflight and SDK-helper demos passed. No live DDS connection
+  or robot command was used during this validation.
+- Operator confirmed normal standing and arms after the aborted run. Follow-up
+  review found no definition of FSM 501 mode 1 in the vendored arm7 example.
+  The official built-in arm-action client lists FSM 501 as supported but is not
+  evidence that mode 1 denotes custom arm-SDK ownership on firmware 1.5.4.
+  The official support interface page could not be retrieved in this session.
+  Keep the commissioning guard unchanged pending authoritative mode semantics.
+- Added exact mode values to rejection errors and a failed commissioning report
+  distinct from generic preflight success. The CLI now persists the rejecting
+  snapshot plus atomic execution evidence (error, completion and successful
+  position/release publication counts), before the final snapshot. Counters do
+  not claim physical acknowledgement; they cannot reconstruct the earlier run.
+  All 73 tests, compile check, lock check and diff check passed. No live retry
+  or new robot command was issued in this follow-up.
+- First explicitly authorized commissioning attempt on eth0 at
+  2026-09-17T10:15:40Z aborted during `_transition_to_start`: the commissioning
+  guard rejected a changed FSM tuple. Before report shows FSM 501/0, after
+  report shows 501/1; mode_pr remained 0 and mode_machine 5. Do not assume mode 1
+  is safe or widen the allowlist without establishing its arm-SDK meaning.
+  SDK release publication completed and the process exited with code 1. The
+  action did not complete; command count and peak motion were not logged, so
+  absence of motion cannot be asserted. No automatic retry was attempted.
+  Before/after reports are under ignored `output/arm_commissioning/` with stem
+  `20260917T101540Z`. After snapshot: all 14 arm faults zero, maximum temperature
+  50 C, linear velocity zero, yaw 0.001065 rad/s. Its generic preflight passed,
+  but that does not mean the stricter commissioning guard passed or that the
+  physical handoff is accepted. Await on-site standing/arm observations.
 - Added `app.arm_commissioning`: explicit live single-run entry point following
   the vendored arm7 SDK example, narrowed to 14 arms and no locomotion command
   client. The commissioning gate permits only `present_left` with confirmation
@@ -371,21 +411,30 @@ the previously recorded 54-test code baseline remains unchanged.
   schema validation, 14-arm normalization, dry-run sequencing, cancellation,
   motion leasing, and the injectable SDK boundary are covered by tests.
 - Live arm execution remains fail-closed. The target-robot read-only preflight
-  passed for firmware 1.5.4, but physical playback has not been authorized or
-  attempted and `hardware_verified` remains `false`.
+  passed for firmware 1.5.4, but the first separately authorized commissioning
+  attempt aborted on FSM 501/1 and did not complete playback.
+  `hardware_verified` remains `false`.
 - Target DDS compatibility is now established with separate HG FSM and GO
   odometry schemas; the preflight rejects unsupported action FSM values and
   non-stationary odometry.
 
 ## Next Actions
 
-1. Review the implemented arm-only commissioning entry point with the operator;
-   do not modify `hardware_verified` to perform the first test. It does not
-   create a walking client or change standing mode.
-2. Confirm stable standing, sufficient battery, no competing arm controller,
-   emergency-stop coverage and clearance for both arms. Obtain fresh robot state and per-run
-   confirmation for a secured `present_left` test with physical emergency-stop
-   coverage. Only after evidence review may `hardware_verified` become true.
+0. Establish the meaning of observed FSM 501 mode 1 during arm SDK takeover;
+   preserve the failed attempt and do not retry or relax the guard automatically.
+   Official SDK code names internal-control selector value 1 `PASSIVE`, but does
+   not establish its relation to `fsm_mode` under FSM 501. Exact guard snapshots
+   and publication counts are now implemented for future attempts; obtain
+   firmware-appropriate confirmation before changing the guard.
+1. Review the failed attempt with firmware-appropriate Unitree support and
+   establish the required standing-controller state and arm-authority handoff.
+   The commissioning entry point does not create a walking client or request a
+   standing-mode change.
+2. Only after resolving the FSM state, reconfirm stable standing, sufficient
+   battery, no competing arm controller, emergency-stop coverage and clearance
+   for both arms. Obtain fresh robot state and per-run confirmation before any
+   secured `present_left` retry. Only after completed evidence review may
+   `hardware_verified` become true.
 3. Retune or regenerate `concierge_speak_v1`; do not bypass its current velocity
    rejection.
 4. Only after the stationary presentation is reliable, populate
@@ -398,7 +447,8 @@ the previously recorded 54-test code baseline remains unchanged.
   subscriber reports and a first-run commissioning gate are implemented.
   Physical arm handoff and tolerance validation remain pending; battery,
   collision clearance and external controller ownership need operator checks.
-  See `doc/arm_acceptance.md`; the candidate is not ready for physical playback.
+  See `doc/arm_acceptance.md`; the candidate is not ready for another physical
+  playback attempt.
 - The target identity and read-only state contract are observed, but the file
   contract remains explicitly unverified for command execution until a secured
   low-speed motion acceptance is reviewed on site.

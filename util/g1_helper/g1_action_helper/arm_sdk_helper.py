@@ -64,6 +64,8 @@ class G1ArmSdkHelper:
         self._state: G1ArmState | None = None
         self._state_lock = threading.Lock()
         self._state_ready = threading.Event()
+        self.position_commands_published = 0
+        self.release_commands_published = 0
 
         if not self.network_interface:
             raise ValueError("network_interface cannot be empty")
@@ -163,6 +165,7 @@ class G1ArmSdkHelper:
             weight=weight,
         )
         self._write(command)
+        self.position_commands_published += 1
 
     def release(self) -> None:
         """Drop arm authority while preserving every measured robot position."""
@@ -184,6 +187,7 @@ class G1ArmSdkHelper:
             weight=0.0,
         )
         self._write(command)
+        self.release_commands_published += 1
         logger.info("Released G1 arm_sdk authority")
 
     def _receive_state(self, message: Any) -> None:

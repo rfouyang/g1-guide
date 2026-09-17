@@ -4,7 +4,7 @@ import json
 import math
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -403,7 +403,15 @@ class CommissioningGuard:
                 "Arm commissioning preflight failed: " + "; ".join(report.failures)
             )
         if (report.fsm_id, report.fsm_mode, report.mode_pr) != (501, 0, 0):
-            raise RuntimeError("Commissioning requires observed FSM 501/0 and mode_pr 0")
+            reason = (
+                "Commissioning requires observed FSM 501/0 and mode_pr 0; "
+                f"observed FSM {report.fsm_id}/{report.fsm_mode}, "
+                f"mode_pr {report.mode_pr}, mode_machine {report.mode_machine}"
+            )
+            self.last_report = replace(
+                report, passed=False, failures=report.failures + (reason,)
+            )
+            raise RuntimeError(reason)
         return True
 
 

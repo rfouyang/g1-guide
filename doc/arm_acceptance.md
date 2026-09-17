@@ -1,6 +1,34 @@
 # Two-arm commissioning checklist
 
-Reviewed: 2026-09-17T10:13:38Z
+Reviewed: 2026-09-17T10:37:50Z
+
+## First attempt and follow-up
+
+The authorized 2026-09-17T10:15:40Z run aborted during start transition when the
+guard rejected mode state. Before/after snapshots show FSM 501/0 then 501/1,
+mode_pr 0; release publication completed. Operator subsequently confirmed normal
+standing and arms. No automatic retry was made and acceptance remains pending.
+
+The restriction to mode 0 is our conservative commissioning policy, **not** an
+assertion from the upstream arm7 example. The official
+[built-in arm-action client](https://github.com/unitreerobotics/unitree_ros2/blob/master/example/src/include/g1/g1_arm_action_client.hpp)
+permits FSM 501 but does not define mode 1 or prove its meaning for custom
+arm-SDK takeover on firmware 1.5.4. The current official
+[G1 locomotion API](https://github.com/unitreerobotics/unitree_sdk2/blob/main/include/unitree/robot/g1/loco/g1_loco_api.hpp)
+names internal-control selector values 0, 1 and 2 as `LAST`, `PASSIVE` and
+`WALKRUN`. Its
+[client implementation](https://github.com/unitreerobotics/unitree_sdk2/blob/main/include/unitree/robot/g1/loco/g1_loco_client.hpp)
+sends those values to `SwitchToInternalCtrl`, while `GetFsmMode` exposes an
+integer without documenting its interpretation within FSM 501. This makes mode
+1 safety-sensitive evidence, but does not prove that the observed 501/1 tuple
+was caused by arm-SDK takeover or has the same semantics as the selector.
+Do not infer mode semantics merely from temporal correlation with this run.
+
+Future attempts persist `_rejected.json` for the actual guard rejection and
+`_execution.json` for completion/error and successful publication counts, in
+addition to before/after generic snapshots. Publication success is not physical
+acknowledgement. The original attempt's command count remains unknown. All 73
+offline tests passed after this instrumentation; the guard is unchanged.
 
 ## Implemented single-run entry point
 
@@ -40,11 +68,13 @@ CYCLONEDDS_HOME="$PWD/third_party/cyclonedds/install" uv run --extra hardware \
   --observed-firmware-version 1.5.4
 ```
 
-This command was **not run** during implementation. The 70-test offline suite
-passes, including commissioning on an unverified contract, slow single-run
-return/fade, guard changes, blocked cleanup and no-DDS default mode. Before/after
-subscriber reports are saved under ignored `output/arm_commissioning/`.
-Neither these reports nor SDK publication establishes physical acceptance.
+This command was run once at 2026-09-17T10:15:40Z and aborted when the continuous
+guard observed FSM 501/1. It must not be retried until that state is understood.
+The current 73-test offline suite passes, including commissioning on an
+unverified contract, slow single-run return/fade, guard changes, blocked cleanup,
+failure evidence and no-DDS default mode. Before/after subscriber reports are
+saved under ignored `output/arm_commissioning/`. Neither these reports nor SDK
+publication establishes physical acceptance.
 Battery, collision clearance and external controller ownership are not currently
 automatically observed by this subscriber interface; operator checks remain
 necessary. The handoff and tracking tolerance still require secured acceptance.
