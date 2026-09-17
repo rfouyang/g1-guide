@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-17 17:57 CST
+Updated: 2026-09-17T09:58:23Z
 
 ## Status
 
@@ -34,8 +34,8 @@ returned 217,256 PCM bytes and the G1 audio stream accepted the full playback.
 The operator confirmed that Kian meets the desired voice quality. The refactored
 file-based path has also completed its first live generation-and-playback test;
 cancellation and repeated playback now have explicit offline behavior and tests,
-and the live API exercise has now completed; operator listening confirmation is
-still required before Phase 1 is accepted.
+and the live API exercise has completed. The operator confirmed satisfactory
+cancellation and repeat playback on 2026-09-17; the Phase 1 speech gate is accepted.
 
 When no DDS interface is supplied, `G1AudioHelper` now runs `ifconfig` and
 selects the interface whose IPv4 address starts with `192.168.123.`. Callers can
@@ -277,8 +277,10 @@ Live audio acceptance evidence (2026-09-17T09:57:06Z): the existing
 1.5 seconds, followed by two complete repeats separated by two-second gaps.
 Cancellation returned after 64,000 of 216,388 PCM bytes; each repeat submitted
 all 216,388 bytes. All three stream IDs differed, and the test process exited
-successfully. Actual audible stop timing and complete repeat playback await
-operator confirmation. The pinned SDK's `PlayStop` discards the RPC response
+successfully. The operator subsequently confirmed that the listening result was
+satisfactory with no issues, accepting the cancellation and repeat exercise.
+No quantitative acoustic stop latency was measured.
+The pinned SDK's `PlayStop` discards the RPC response
 and returns zero unconditionally, so this run does not prove stop acknowledgement.
 No arm or locomotion command was issued. Only this handoff document changed;
 the previously recorded 54-test code baseline remains unchanged.
@@ -335,9 +337,8 @@ the previously recorded 54-test code baseline remains unchanged.
   `component/action/`, and `component/nav/`. Low-level BytePlus generation and
   G1 network/audio/action SDK details remain in their approved `util/*_helper.py`
   boundaries.
-- Phase 1 still needs audio cancellation and repeat-playback acceptance. The
-  offline cancellation and repeat behavior is implemented and tested, and the
-  live API exercise completed; operator listening confirmation remains.
+- Phase 1 speech is accepted: offline cancellation and repeat tests, the live
+  API exercise, and operator listening confirmation are complete.
   The Phase 2 offline foundation is
   complete for `present_left`: recorder data,
   schema validation, 14-arm normalization, dry-run sequencing, cancellation,
@@ -351,9 +352,9 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Next Actions
 
-1. Obtain operator listening confirmation for the completed cancellation and
-   two-repeat exercise before accepting Phase 1; preserve the SDK stop-response
-   limitation in any interpretation of programmatic results.
+1. Prepare the Phase 2 arm-motion acceptance procedure and review the live
+   execution interlocks; obtain fresh robot state and per-run operator
+   confirmation before any physical motion.
 2. Review the provisional action gains and limits with an on-site operator, then
    perform a secured, low-speed `present_left` test with physical emergency-stop
    coverage. Only after that evidence may `hardware_verified` become true.
@@ -374,7 +375,8 @@ the previously recorded 54-test code baseline remains unchanged.
   recorded.
 - FAST-LIO2 saved-map relocalization and rotation stability are not yet validated
   on the target robot.
-- Audio cancellation and repeats completed at the API level; audible acceptance
-  remains pending, and the SDK does not expose the actual stop RPC result.
+- Audio cancellation and repeats have operator acceptance. The SDK still does
+  not expose the actual stop RPC result; listening acceptance does not establish
+  a guaranteed stop latency or programmatic stop acknowledgement.
 - The definition of the guide's safe home position or docking behavior is not
   yet decided.
