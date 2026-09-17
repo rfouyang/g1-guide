@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-17 17:25 CST
+Updated: 2026-09-17 17:34 CST
 
 ## Status
 
@@ -32,7 +32,8 @@ The first live BytePlus-to-G1 test completed successfully on `eth0`: BytePlus
 returned 217,256 PCM bytes and the G1 audio stream accepted the full playback.
 The operator confirmed that Kian meets the desired voice quality. The refactored
 file-based path has also completed its first live generation-and-playback test;
-cancellation and repeated playback remain before Phase 1 is accepted.
+cancellation and repeated playback now have explicit offline behavior and tests,
+but both still require stationary live acceptance before Phase 1 is accepted.
 
 When no DDS interface is supplied, `G1AudioHelper` now runs `ifconfig` and
 selects the interface whose IPv4 address starts with `192.168.123.`. Callers can
@@ -237,6 +238,14 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   persistence. Python compilation and project-owned diff checks also passed. An
   online `uv lock --check` resolved the unchanged metadata and confirmed that
   `uv.lock` is current.
+- Added explicit speech cancellation from `TourAudioComponent` through
+  `G1AudioHelper`. Cancellation interrupts chunk pacing, calls `PlayStop` in the
+  existing cleanup path, and returns a receipt that distinguishes cancellation
+  from completion. Each playback uses a new stream ID.
+- All 50 unit tests passed after the speech update. New regressions cover
+  cancellation after a submitted chunk, partial-byte evidence, `PlayStop`, fresh
+  IDs and cleanup across repeated playback, and propagation of the shared
+  cancellation signal through the guide component.
 
 ## Current Files
 
@@ -275,7 +284,7 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 
 ## Session Checkpoint
 
-- Work paused in a safe state at 2026-09-17 17:25 CST. No robot, DDS, cloud, ROS,
+- Work paused in a safe state at 2026-09-17 17:34 CST. No robot, DDS, cloud, ROS,
   or demo process was left running, and no motion command was issued.
 - Phase 1 speech generation and one complete file-based G1 playback are working.
   The current reusable test asset is `data/tts/welcome_bilingual.wav`.
@@ -287,7 +296,9 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   G1 network/audio/action SDK details remain in their approved `util/*_helper.py`
   boundaries.
 - Phase 1 still needs audio cancellation and repeat-playback acceptance. The
-  Phase 2 offline foundation is complete for `present_left`: recorder data,
+  offline cancellation and repeat behavior is implemented and tested; only the
+  stationary target-G1 acceptance remains. The Phase 2 offline foundation is
+  complete for `present_left`: recorder data,
   schema validation, 14-arm normalization, dry-run sequencing, cancellation,
   motion leasing, and the injectable SDK boundary are covered by tests.
 - Live arm execution remains fail-closed. The read-only preflight implementation
@@ -302,8 +313,8 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
 
 ## Next Actions
 
-1. Add explicit cancellation and repeat-playback tests, then verify both on the
-   stationary G1 before accepting the Phase 1 gate.
+1. Verify cancellation and repeated playback on the stationary G1 before
+   accepting the Phase 1 gate; the offline implementation and tests are complete.
 2. Run the read-only G1 action preflight on the stationary target. Record the
    independently observed model and firmware, verify that the target publishes
    the configured motion-state schema/topic, and review the saved report. Do not
@@ -330,6 +341,7 @@ arm DDS indices 15–28, and the authority weight at unused slot 29. The recorde
   recorded.
 - FAST-LIO2 saved-map relocalization and rotation stability are not yet validated
   on the target robot.
-- BytePlus-to-G1 cancellation behavior is not implemented or validated yet.
+- BytePlus-to-G1 cancellation is implemented offline but not yet validated on
+  the target speaker service.
 - The definition of the guide's safe home position or docking behavior is not
   yet decided.

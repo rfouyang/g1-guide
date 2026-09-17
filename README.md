@@ -88,7 +88,9 @@ The demo uses BytePlus TTS 2.0 Kian (`zh_male_m191_uranus_bigtts`) to generate
 `data/tts/welcome_bilingual.wav`. The guide audio component then selects that
 named file, and the G1 audio helper reads and streams its PCM frames.
 `--confirm-stationary` confirms only a speech test. The path imports no arm or
-locomotion APIs.
+locomotion APIs. Application workflows can pass one `threading.Event` through
+the guide component to interrupt chunk pacing and call Unitree `PlayStop`;
+separate playback calls always use separate stream IDs.
 
 Project conventions are recorded in `AGENTS.md`. Plans and current progress are
 kept under `doc/`.

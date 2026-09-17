@@ -2,13 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Protocol
+
+
+class AudioPlaybackResult(Protocol):
+    """Minimum low-level playback outcome used by the guide component."""
+
+    cancelled: bool
 
 
 class AudioFilePlayer(Protocol):
     """Boundary for playing one audio file."""
 
-    def play(self, audio_path: Path) -> None:
+    def play(
+        self,
+        audio_path: Path,
+        cancel_event: Event | None = None,
+    ) -> AudioPlaybackResult:
         """Play a validated audio file."""
 
 
@@ -18,6 +29,7 @@ class TourAudioReceipt:
 
     audio_name: str
     audio_path: Path
+    cancelled: bool
 
 
 class TourAudioComponent:
@@ -28,7 +40,11 @@ class TourAudioComponent:
         self.audio_root = audio_root.resolve()
         self.last_receipt: TourAudioReceipt | None = None
 
-    def play(self, audio_name: str) -> TourAudioReceipt:
+    def play(
+        self,
+        audio_name: str,
+        cancel_event: Event | None = None,
+    ) -> TourAudioReceipt:
         normalized_name = audio_name.strip()
         if not normalized_name:
             raise ValueError("audio_name cannot be empty")
@@ -46,10 +62,11 @@ class TourAudioComponent:
         if not audio_path.is_file():
             raise FileNotFoundError(f"Guide audio does not exist: {audio_path}")
 
-        self.player.play(audio_path)
+        playback = self.player.play(audio_path, cancel_event)
         playback_receipt = TourAudioReceipt(
             audio_name=Path(file_name).stem,
             audio_path=audio_path,
+            cancelled=playback.cancelled,
         )
         self.last_receipt = playback_receipt
         return playback_receipt
@@ -61,8 +78,22 @@ class DemoAudioFilePlayer:
     def __init__(self) -> None:
         self.played_paths: list[Path] = []
 
-    def play(self, audio_path: Path) -> None:
+    def play(
+        self,
+        audio_path: Path,
+        cancel_event: Event | None = None,
+    ) -> DemoAudioPlayback:
         self.played_paths.append(audio_path)
+        cancelled = cancel_event.is_set() if cancel_event is not None else False
+        playback = DemoAudioPlayback(cancelled=cancelled)
+        return playback
+
+
+@dataclass(frozen=True)
+class DemoAudioPlayback:
+    """Deterministic playback outcome for the safe module demo."""
+
+    cancelled: bool
 
 
 def demo_tour_audio_component() -> None:
@@ -76,6 +107,7 @@ def demo_tour_audio_component() -> None:
         receipt = component.play(".demo_audio")
         assert player.played_paths == [demo_path.resolve()]
         assert receipt.audio_name == ".demo_audio"
+        assert not receipt.cancelled
         print("Tour audio component: named audio selection verified")
     finally:
         demo_path.unlink(missing_ok=True)

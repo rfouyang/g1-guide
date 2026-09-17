@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from threading import Event
 
 from util.g1_helper.g1_audio_helper import G1AudioHelper
 
@@ -14,7 +15,9 @@ class FakeAudioSdkClient:
         self.timeout = 0.0
         self.initialized = False
         self.chunks: list[bytes] = []
+        self.stream_ids: list[str] = []
         self.stopped_apps: list[str] = []
+        self.cancel_after_chunk: Event | None = None
 
     def SetTimeout(self, timeout: float) -> None:
         self.timeout = timeout
@@ -25,10 +28,13 @@ class FakeAudioSdkClient:
     def PlayStream(
         self,
         _: str,
-        __: str,
+        stream_id: str,
         pcm_audio: bytes,
     ) -> tuple[int, None]:
+        self.stream_ids.append(stream_id)
         self.chunks.append(pcm_audio)
+        if self.cancel_after_chunk is not None:
+            self.cancel_after_chunk.set()
         return self.response_code, None
 
     def PlayStop(self, app_name: str) -> int:
@@ -71,12 +77,15 @@ class G1AudioHelperTests(unittest.TestCase):
             audio_path = Path(temporary_directory) / "welcome.wav"
             self._write_wav(audio_path, b"123456")
             helper.connect()
-            helper.play(audio_path)
+            playback = helper.play(audio_path)
 
         self.assertEqual(boundary.channel_calls, [(0, "eth0")])
         self.assertEqual(boundary.audio_client.chunks, [b"1234", b"56"])
         self.assertEqual(sleep_durations, [4 / 32000, 2 / 32000])
         self.assertEqual(boundary.audio_client.stopped_apps, ["g1_guide_tts"])
+        self.assertFalse(playback.cancelled)
+        self.assertEqual(playback.submitted_bytes, 6)
+        self.assertEqual(playback.total_bytes, 6)
 
     def test_play_requires_connection(self) -> None:
         helper = G1AudioHelper("eth0")
@@ -102,6 +111,52 @@ class G1AudioHelperTests(unittest.TestCase):
                 helper.play(audio_path)
 
         self.assertEqual(boundary.audio_client.stopped_apps, ["g1_guide_tts"])
+
+    def test_cancellation_stops_after_current_chunk(self) -> None:
+        boundary = FakeSdkBoundary()
+        cancel_event = Event()
+        boundary.audio_client.cancel_after_chunk = cancel_event
+        helper = G1AudioHelper(
+            "eth0",
+            chunk_size=4,
+            channel_initializer=boundary.initialize_channel,
+            client_factory=boundary.create_client,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            audio_path = Path(temporary_directory) / "welcome.wav"
+            self._write_wav(audio_path, b"12345678")
+            helper.connect()
+            playback = helper.play(audio_path, cancel_event)
+
+        self.assertTrue(playback.cancelled)
+        self.assertEqual(playback.submitted_bytes, 4)
+        self.assertEqual(boundary.audio_client.chunks, [b"1234"])
+        self.assertEqual(boundary.audio_client.stopped_apps, ["g1_guide_tts"])
+
+    def test_repeated_playback_uses_new_stream_ids(self) -> None:
+        boundary = FakeSdkBoundary()
+        helper = G1AudioHelper(
+            "eth0",
+            sleeper=lambda _: None,
+            channel_initializer=boundary.initialize_channel,
+            client_factory=boundary.create_client,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            audio_path = Path(temporary_directory) / "welcome.wav"
+            self._write_wav(audio_path, b"1234")
+            helper.connect()
+            first_playback = helper.play(audio_path)
+            second_playback = helper.play(audio_path)
+
+        self.assertNotEqual(first_playback.stream_id, second_playback.stream_id)
+        self.assertFalse(first_playback.cancelled)
+        self.assertFalse(second_playback.cancelled)
+        self.assertEqual(
+            boundary.audio_client.stopped_apps,
+            ["g1_guide_tts", "g1_guide_tts"],
+        )
 
 
 if __name__ == "__main__":

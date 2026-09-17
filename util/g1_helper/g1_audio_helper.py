@@ -3,13 +3,25 @@ from __future__ import annotations
 import time
 import wave
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Any
 from uuid import uuid4
 
 from loguru import logger
 
 from util.g1_helper.g1_network_helper import G1NetworkHelper
+
+
+@dataclass(frozen=True)
+class G1AudioPlayback:
+    """Observed outcome of one G1 PCM stream."""
+
+    stream_id: str
+    submitted_bytes: int
+    total_bytes: int
+    cancelled: bool
 
 
 class G1AudioHelper:
@@ -60,9 +72,15 @@ class G1AudioHelper:
         self._audio_client = audio_client
         logger.info("G1 audio helper initialized")
 
-    def play(self, audio_path: Path) -> None:
+    def play(
+        self,
+        audio_path: Path,
+        cancel_event: Event | None = None,
+    ) -> G1AudioPlayback:
         if not self.connected:
             raise RuntimeError("G1 audio helper is not connected")
+        if cancel_event is not None and not isinstance(cancel_event, Event):
+            raise TypeError("cancel_event must be threading.Event")
 
         resolved_audio_path = audio_path.resolve()
         with wave.open(str(resolved_audio_path), "rb") as wav_file:
@@ -71,14 +89,37 @@ class G1AudioHelper:
             sample_rate = wav_file.getframerate()
             channels = wav_file.getnchannels()
 
-        self._play_pcm(pcm_audio, sample_rate, channels)
-        logger.info("G1 played audio file {}", resolved_audio_path)
+        playback = self._play_pcm(
+            pcm_audio,
+            sample_rate,
+            channels,
+            cancel_event,
+        )
+        logger.info(
+            "G1 audio file {} {} after {} of {} bytes",
+            resolved_audio_path,
+            "cancelled" if playback.cancelled else "completed",
+            playback.submitted_bytes,
+            playback.total_bytes,
+        )
+        return playback
 
-    def _play_pcm(self, pcm_audio: bytes, sample_rate: int, channels: int) -> None:
+    def _play_pcm(
+        self,
+        pcm_audio: bytes,
+        sample_rate: int,
+        channels: int,
+        cancel_event: Event | None,
+    ) -> G1AudioPlayback:
         stream_id = str(uuid4())
         bytes_per_second = sample_rate * channels * 2
+        submitted_bytes = 0
+        cancelled = False
         try:
             for chunk_start in range(0, len(pcm_audio), self.chunk_size):
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
                 audio_chunk = pcm_audio[
                     chunk_start : chunk_start + self.chunk_size
                 ]
@@ -91,10 +132,22 @@ class G1AudioHelper:
                     raise RuntimeError(
                         f"Unitree audio stream failed with code {response_code}"
                     )
+                submitted_bytes += len(audio_chunk)
                 chunk_duration = len(audio_chunk) / bytes_per_second
-                self.sleeper(chunk_duration)
+                if cancel_event is None:
+                    self.sleeper(chunk_duration)
+                elif cancel_event.wait(chunk_duration):
+                    cancelled = True
+                    break
         finally:
             self._audio_client.PlayStop(self.app_name)
+        playback = G1AudioPlayback(
+            stream_id=stream_id,
+            submitted_bytes=submitted_bytes,
+            total_bytes=len(pcm_audio),
+            cancelled=cancelled,
+        )
+        return playback
 
     def _validate_wav(self, wav_file: wave.Wave_read) -> None:
         if wav_file.getframerate() != 16000:
