@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-09-17T10:37:50Z
+Updated: 2026-09-17T10:52:32Z
 
 ## Status
 
@@ -327,6 +327,55 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Session Checkpoint
 
+- The upstream-aligned 10:52:00Z attempt passed fresh preflight and FSM handoff,
+  then aborted after seven position publications on left-shoulder-roll tracking:
+  observed 0.208921 rad, expected 0.221442 rad, error 0.012521 rad, limit 0.01
+  rad. One release publication completed. The final generic snapshot passed in
+  FSM 501/1 with zero arm faults, maximum arm temperature 50 C, zero linear
+  velocity and yaw 0.009587 rad/s. This real full-authority controller transient
+  requires operator observation and review before changing tolerance or retrying.
+- Re-review of the vendored Unitree G1 arm5 and arm7 examples found that both set
+  authority slot 29 to one immediately during takeover while interpolating joint
+  targets from measured positions. They fade authority only during release. Our
+  start transition had instead ramped authority from zero. It now uses full arm
+  authority with a smooth measured-to-action-start transition, matching the
+  upstream sequence while retaining the 14-arm allowlist, lower gains, tracking
+  checks and gradual release. Targeted action/preflight tests pass.
+- The 10:48:07Z retry stopped at its initial guard on a -0.013848 rad/s yaw
+  sample. No arm publisher was constructed and the evidence records zero position
+  and release publications. Its final generic snapshot passed at -0.002131
+  rad/s. The unchanged 0.01 rad/s yaw limit now requires a fresh confirming
+  sample for an isolated excursion: initial checks retry after 0.05 seconds and
+  active execution aborts on two consecutive violating cycles. Linear motion and
+  every other preflight failure remain immediate stops. The duplicate guard call
+  per control cycle was removed.
+- A confirmed 10:44:49Z attempt stopped before any position publication on a
+  transient yaw sample of -0.010653 rad/s, outside the unchanged 0.01 rad/s
+  stationary limit. Its final generic report passed at -0.002131 rad/s. After a
+  fresh passing preflight, the 10:45:25Z attempt passed the narrowed FSM handoff
+  and stopped after 11 position publications on left-elbow tracking. One release
+  publication completed and the final generic report passed with FSM 501/1,
+  zero arm faults, maximum arm temperature 50 C, zero linear velocity and yaw
+  0.003196 rad/s. Physical completion did not occur.
+- At the tracking failure, the left-elbow target was approximately 0.9962 rad
+  while the joint remained near its 0.9846 rad starting pose, exceeding the 0.01
+  rad limit by roughly 0.0016 rad. Upstream takeover review identified the
+  incorrect authority ramp described above. The tracking limit remains 0.01 rad;
+  errors now include observed, expected, error and limit values.
+- The operator reported firmware-appropriate Unitree confirmation that FSM 501/1
+  is valid during the arm-SDK handoff and reconfirmed standing, workspace
+  clearance and physical emergency-stop coverage; the documentary source is not
+  stored in the repository. A fresh 2026-09-17T10:41:53Z read-only preflight
+  passed in FSM 501/0. A second authorized attempt at 10:42:08Z again aborted on
+  the transition to 501/1 after seven successful position publications, followed
+  by one successful release publication. The final generic report passed with
+  zero arm faults, maximum arm temperature 50 C, zero linear velocity and yaw
+  speed -0.009587 rad/s. These publication results are not physical
+  acknowledgement; on-site post-abort observation is still required.
+- The commissioning guard now requires FSM 501/0 on its first check, then permits
+  only modes 0 and 1 under FSM 501 with mode_pr 0 during the active handoff. It
+  still rejects mode 1 as an initial state and rejects every other FSM or mode.
+  Normal live execution remains locked by `hardware_verified: false`.
 - Current official Unitree SDK sources name internal-control selector value 1
   `PASSIVE` and use it as an argument to `SwitchToInternalCtrl`. The same client
   exposes `GetFsmMode`, but Unitree does not document that the selector enum
@@ -420,17 +469,12 @@ the previously recorded 54-test code baseline remains unchanged.
 
 ## Next Actions
 
-0. Establish the meaning of observed FSM 501 mode 1 during arm SDK takeover;
-   preserve the failed attempt and do not retry or relax the guard automatically.
-   Official SDK code names internal-control selector value 1 `PASSIVE`, but does
-   not establish its relation to `fsm_mode` under FSM 501. Exact guard snapshots
-   and publication counts are now implemented for future attempts; obtain
-   firmware-appropriate confirmation before changing the guard.
-1. Review the failed attempt with firmware-appropriate Unitree support and
-   establish the required standing-controller state and arm-authority handoff.
-   The commissioning entry point does not create a walking client or request a
-   standing-mode change.
-2. Only after resolving the FSM state, reconfirm stable standing, sufficient
+0. Obtain the operator's post-abort confirmation that standing and both arms
+   remain normal. Review the measured 0.012521 rad shoulder-roll tracking
+   transient before changing the 0.01 rad limit or authorizing another retry.
+1. Preserve both failed attempts and the operator-reported Unitree confirmation.
+   Capture the underlying firmware documentation when available.
+2. Before a secured retry, reconfirm stable standing, sufficient
    battery, no competing arm controller, emergency-stop coverage and clearance
    for both arms. Obtain fresh robot state and per-run confirmation before any
    secured `present_left` retry. Only after completed evidence review may

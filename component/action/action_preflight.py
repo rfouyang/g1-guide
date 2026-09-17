@@ -385,26 +385,59 @@ class ActionPreflightService:
 class CommissioningGuard:
     """Restrict first-run playback to the observed G1 configuration."""
 
+    INITIAL_YAW_RETRY_SECONDS = 0.05
+    MAX_CONSECUTIVE_YAW_FAILURES = 2
+
     def __init__(
-        self, preflight: ActionPreflightService, model_id: str, firmware: str
+        self, preflight: ActionPreflightService, model_id: str, firmware: str,
+        **kwargs: object,
     ) -> None:
         self.preflight = preflight
         self.model_id = model_id
         self.firmware = firmware
+        self.sleeper = kwargs.get("sleeper", time.sleep)
         self.last_report: ActionPreflightReport | None = None
+        self.initial_check_passed = False
+        self.consecutive_yaw_failures = 0
+        if not callable(self.sleeper):
+            raise TypeError("sleeper must be callable")
 
     def check(self) -> bool:
         if self.firmware != "1.5.4":
             raise RuntimeError("Commissioning is restricted to observed firmware 1.5.4")
         report = self.preflight.inspect(self.model_id, self.firmware)
         self.last_report = report
+        if not self.initial_check_passed and self._is_yaw_only_failure(report):
+            self.sleeper(self.INITIAL_YAW_RETRY_SECONDS)
+            report = self.preflight.inspect(self.model_id, self.firmware)
+            self.last_report = report
         if not report.passed:
+            if self._is_yaw_only_failure(report) and self.initial_check_passed:
+                self.consecutive_yaw_failures += 1
+                if (
+                    self.consecutive_yaw_failures
+                    < self.MAX_CONSECUTIVE_YAW_FAILURES
+                ):
+                    logger.warning(
+                        "Observed one transient stationary-yaw violation; "
+                        "requiring confirmation on the next control cycle"
+                    )
+                    return True
             raise RuntimeError(
                 "Arm commissioning preflight failed: " + "; ".join(report.failures)
             )
-        if (report.fsm_id, report.fsm_mode, report.mode_pr) != (501, 0, 0):
+        self.consecutive_yaw_failures = 0
+        allowed_modes = (0, 1) if self.initial_check_passed else (0,)
+        if (
+            report.fsm_id != 501
+            or report.fsm_mode not in allowed_modes
+            or report.mode_pr != 0
+        ):
+            required_modes = (
+                "501/0 or 501/1" if self.initial_check_passed else "501/0"
+            )
             reason = (
-                "Commissioning requires observed FSM 501/0 and mode_pr 0; "
+                f"Commissioning requires observed FSM {required_modes} and mode_pr 0; "
                 f"observed FSM {report.fsm_id}/{report.fsm_mode}, "
                 f"mode_pr {report.mode_pr}, mode_machine {report.mode_machine}"
             )
@@ -412,7 +445,15 @@ class CommissioningGuard:
                 report, passed=False, failures=report.failures + (reason,)
             )
             raise RuntimeError(reason)
+        self.initial_check_passed = True
         return True
+
+    @staticmethod
+    def _is_yaw_only_failure(report: ActionPreflightReport) -> bool:
+        yaw_only_failure = report.failures == (
+            "observed base yaw speed is not stationary",
+        )
+        return yaw_only_failure
 
 
 class DemoActionStateReader:

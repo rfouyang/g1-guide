@@ -58,7 +58,8 @@ class FakeArmClient:
         **_: object,
     ) -> None:
         self.commands.append(tuple(float(value) for value in arm_positions))
-        self.weights.append(float(_.get("weight", 1.0)))
+        weight = float(_.get("weight", 1.0))
+        self.weights.append(weight)
         if self.track_commands:
             positions = list(self.state.positions)
             positions[15:29] = self.commands[-1]
@@ -148,6 +149,15 @@ class ActionServiceTests(unittest.TestCase):
         self.assertEqual(stops, [True])
         self.assertIs(self.motion_lease.owner, MotionOwner.IDLE)
 
+    def test_tracking_error_reports_observed_expected_error_and_limit(self) -> None:
+        service, arm_client, clock, stops = self._live_service()
+        arm_client.track_commands = False
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"observed=.*expected=.*error=.*limit=0\.010000",
+        ):
+            service.execute("present_left", operator_confirmed=True)
+
     def test_commissioning_runs_once_without_verification_or_base_commands(self) -> None:
         service, arm_client, clock, stops = self._live_service()
         service.loader = self.loader
@@ -159,6 +169,7 @@ class ActionServiceTests(unittest.TestCase):
         self.assertEqual(execution.duration_seconds, 16.0)
         self.assertEqual(arm_client.commands[-1], initial_arms)
         self.assertEqual(arm_client.weights[-1], 0.0)
+        self.assertTrue(all(weight == 1.0 for weight in arm_client.weights[:101]))
         self.assertEqual(stops, [])
         self.assertGreater(clock.now, 29.0)
         self.assertTrue(arm_client.released)

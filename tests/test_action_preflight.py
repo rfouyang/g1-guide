@@ -61,6 +61,80 @@ class ActionPreflightServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "501/0"):
             guard.check()
 
+    def test_commissioning_guard_allows_mode_one_only_after_initial_handoff(self) -> None:
+        reader = FakeActionStateReader(self._healthy_observation())
+        guard = CommissioningGuard(
+            self._service(reader), self.contract.robot_model_id, "1.5.4"
+        )
+        self.assertTrue(guard.check())
+        reader.observation = replace(
+            reader.observation,
+            fsm_state=replace(reader.observation.fsm_state, fsm_mode=1),
+        )
+        self.assertTrue(guard.check())
+        self.assertTrue(guard.last_report.passed)
+
+    def test_commissioning_guard_rejects_other_mode_after_initial_handoff(self) -> None:
+        reader = FakeActionStateReader(self._healthy_observation())
+        guard = CommissioningGuard(
+            self._service(reader), self.contract.robot_model_id, "1.5.4"
+        )
+        self.assertTrue(guard.check())
+        reader.observation = replace(
+            reader.observation,
+            fsm_state=replace(reader.observation.fsm_state, fsm_mode=2),
+        )
+        with self.assertRaisesRegex(RuntimeError, "501/0 or 501/1"):
+            guard.check()
+
+    def test_commissioning_guard_rechecks_initial_yaw_excursion(self) -> None:
+        healthy = self._healthy_observation()
+        reader = FakeActionStateReader(replace(
+            healthy,
+            motion_state=replace(healthy.motion_state, yaw_speed=0.02),
+        ))
+
+        def restore_stationary(_: float) -> None:
+            reader.observation = healthy
+
+        guard = CommissioningGuard(
+            self._service(reader), self.contract.robot_model_id, "1.5.4",
+            sleeper=restore_stationary,
+        )
+        self.assertTrue(guard.check())
+        self.assertTrue(guard.last_report.passed)
+        self.assertEqual(reader.wait_timeouts, [5.0, 5.0])
+
+    def test_commissioning_guard_rejects_sustained_yaw_excursion(self) -> None:
+        healthy = self._healthy_observation()
+        reader = FakeActionStateReader(healthy)
+        guard = CommissioningGuard(
+            self._service(reader), self.contract.robot_model_id, "1.5.4"
+        )
+        self.assertTrue(guard.check())
+        reader.observation = replace(
+            healthy,
+            motion_state=replace(healthy.motion_state, yaw_speed=0.02),
+        )
+        self.assertTrue(guard.check())
+        with self.assertRaisesRegex(RuntimeError, "yaw speed"):
+            guard.check()
+
+    def test_commissioning_guard_never_debounces_linear_motion(self) -> None:
+        healthy = self._healthy_observation()
+        reader = FakeActionStateReader(replace(
+            healthy,
+            motion_state=replace(
+                healthy.motion_state,
+                linear_velocity=(0.02, 0.0, 0.0),
+            ),
+        ))
+        guard = CommissioningGuard(
+            self._service(reader), self.contract.robot_model_id, "1.5.4"
+        )
+        with self.assertRaisesRegex(RuntimeError, "linear velocity"):
+            guard.check()
+
     def test_commissioning_rejects_different_firmware(self) -> None:
         reader = FakeActionStateReader(self._healthy_observation())
         guard = CommissioningGuard(

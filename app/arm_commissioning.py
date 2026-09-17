@@ -69,7 +69,7 @@ class ArmCommissioningApplication:
         )
         service = ActionService(
             loader, ExecutionPolicy(ExecutionMode.LIVE), application.motion_lease,
-            arm_client=arm_client, base_is_stationary=guard.check,
+            arm_client=arm_client, base_is_stationary=lambda: True,
             live_guard=guard.check,
         )
         previous_int = signal.signal(signal.SIGINT, self.request_cancel)

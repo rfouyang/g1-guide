@@ -1,8 +1,8 @@
 # Two-arm commissioning checklist
 
-Reviewed: 2026-09-17T10:37:50Z
+Reviewed: 2026-09-17T10:52:32Z
 
-## First attempt and follow-up
+## Commissioning attempts and follow-up
 
 The authorized 2026-09-17T10:15:40Z run aborted during start transition when the
 guard rejected mode state. Before/after snapshots show FSM 501/0 then 501/1,
@@ -28,7 +28,58 @@ Future attempts persist `_rejected.json` for the actual guard rejection and
 `_execution.json` for completion/error and successful publication counts, in
 addition to before/after generic snapshots. Publication success is not physical
 acknowledgement. The original attempt's command count remains unknown. All 73
-offline tests passed after this instrumentation; the guard is unchanged.
+offline tests passed after this instrumentation.
+
+On 2026-09-17, the operator reported firmware-appropriate Unitree confirmation
+that FSM 501/1 is valid during this arm-SDK handoff and reconfirmed standing,
+workspace clearance and physical emergency-stop coverage. The documentary source
+was not captured in the repository. A fresh preflight at 10:41:53Z passed in FSM
+501/0 with zero arm faults and stationary odometry. The subsequent attempt again
+aborted during the start transition on FSM 501/1 after seven position
+publications; one zero-authority release was published and the final generic
+preflight passed. Evidence is under ignored `output/arm_commissioning/` with stem
+`20260917T104208Z`. Physical completion did not occur.
+
+The guard now requires FSM 501/0 for its initial handoff check. After that exact
+check passes, continuous checks permit only FSM 501 modes 0 and 1 with mode_pr 0.
+This does not broaden normal live execution or change `hardware_verified`.
+
+A confirmed attempt at 10:44:49Z stopped before any position command when one
+odometry sample reported -0.010653 rad/s yaw, just beyond the unchanged 0.01
+rad/s stationary limit. The final yaw was -0.002131 rad/s and the generic report
+passed. A fresh preflight passed before the next attempt at 10:45:25Z. That run
+passed the FSM handoff but stopped after 11 position publications because the
+left elbow exceeded the 0.01 rad tracking limit during the authority ramp. The
+final generic report again passed, with zero arm faults and FSM 501/1.
+
+Review showed that our takeover sequence differed from both vendored Unitree G1
+arm examples. Those examples set authority slot 29 to one immediately while
+keeping the first joint targets close to measured positions, then interpolate
+joint targets; only their release stage fades authority to zero. Our transition
+had incorrectly ramped authority from zero. It now matches the upstream takeover
+sequence: full arm authority with a smooth measured-to-action-start transition.
+The project still commands only the 14 allowlisted arms, uses its lower gains,
+and retains the 0.01 rad tracking limit. Rejection errors now record observed,
+expected, error and limit values.
+
+The 10:48:07Z retry did not construct an arm publisher because its initial guard
+observed -0.013848 rad/s yaw. It recorded zero position and release publications;
+the final generic snapshot passed at -0.002131 rad/s. Repeated short-lived yaw
+samples above the threshold are now confirmed against a subsequent fresh sample;
+the limit has not been relaxed. An initial excursion must be followed by a
+passing sample after 0.05 seconds. During execution, two consecutive violating
+cycles abort. Linear motion and every other preflight failure still abort
+immediately.
+
+After a fresh passing preflight, the upstream-aligned 10:52:00Z attempt reached
+full arm authority and published seven transition positions. It aborted when the
+left shoulder roll measured 0.208921 rad against an expected 0.221442 rad: a
+0.012521 rad deviation beyond the unchanged 0.01 rad tracking limit. One release
+publication completed. The final generic snapshot passed in FSM 501/1 with zero
+arm faults, maximum arm temperature 50 C, zero linear velocity and yaw 0.009587
+rad/s. This is the first measured controller transient after correcting the
+takeover sequence; do not widen the tolerance or retry until the operator
+confirms the physical response and the transient is reviewed.
 
 ## Implemented single-run entry point
 
@@ -51,8 +102,9 @@ explicit live confirmation and a live state guard, stretches playback from 4 s
 to 16 s, returns to this run's measured initial arm positions over at least 8 s,
 then fades authority over 3 s. The initial transition remains 2 s and is checked
 against velocity/acceleration limits. The guard restricts the observed target to
-firmware 1.5.4, FSM 501/0 and mode_pr 0 and rechecks subscriber preflight evidence
-throughout execution. Ctrl-C/SIGTERM requests cancellation; cancellation/fault
+firmware 1.5.4, requires FSM 501/0 and mode_pr 0 at initial handoff, then permits
+only FSM 501/0 or 501/1 while rechecking subscriber preflight evidence throughout
+execution. Ctrl-C/SIGTERM requests cancellation; cancellation/fault
 does not attempt the normal return trajectory and instead attempts immediate
 zero-authority release. This is not a verified physical emergency stop.
 
@@ -68,9 +120,8 @@ CYCLONEDDS_HOME="$PWD/third_party/cyclonedds/install" uv run --extra hardware \
   --observed-firmware-version 1.5.4
 ```
 
-This command was run once at 2026-09-17T10:15:40Z and aborted when the continuous
-guard observed FSM 501/1. It must not be retried until that state is understood.
-The current 73-test offline suite passes, including commissioning on an
+This command has not yet completed on hardware. The attempts and resulting guard
+and tracking changes are recorded above. The current offline suite covers commissioning on an
 unverified contract, slow single-run return/fade, guard changes, blocked cleanup,
 failure evidence and no-DDS default mode. Before/after subscriber reports are
 saved under ignored `output/arm_commissioning/`. Neither these reports nor SDK

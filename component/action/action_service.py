@@ -304,7 +304,7 @@ class ActionService:
                 arm_positions,
                 kp=limits.arm_kp,
                 kd=limits.arm_kd,
-                weight=ratio,
+                weight=1.0,
             )
             expected_positions = arm_positions
             deadline += period
@@ -374,7 +374,10 @@ class ActionService:
             tracking_error = abs(current_state.positions[index] - expected)
             if tracking_error > self.loader.safety_limits.max_tracking_error:
                 raise RuntimeError(
-                    f"Arm tracking error exceeds limit at DDS index {index}"
+                    "Arm tracking error exceeds limit at DDS index "
+                    f"{index}: observed={current_state.positions[index]:.6f}, "
+                    f"expected={expected:.6f}, error={tracking_error:.6f}, "
+                    f"limit={self.loader.safety_limits.max_tracking_error:.6f}"
                 )
         return False
 
